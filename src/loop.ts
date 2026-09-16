@@ -214,6 +214,127 @@ export function repairBoardFromEvents(): { moved: number; repaired: string[] } {
   return { moved: moved.length, repaired };
 }
 
+// ── CONVERGENCE ROUNDS ──
+// Bounded actor-critic dialogue refereed by the lever. Each round: actor pull
+// → verify gate → critic eval → ledger update. Round 0 = plan critique before
+// any expensive attempt. Spawn a specialist serf when the same missing
+// capability is cited in two consecutive round triages.
+
+function leverOf(card: CardFolder): string | null {
+  const m = card.body.match(/## Lever\n([\s\S]*?)(?=\n## |$)/m);
+  const lever = m?.[1]?.trim();
+  return lever ? `lever:${card.id}` : null;
+}
+
+function slugify(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+async function convergeCard(
+  config: LoopConfig,
+  card: CardFolder,
+  maxRetries: number,
+  kind: "trivial" | "standard" | "hard",
+): Promise<"converged" | "no-convergence"> {
+  const conf = await import("./confidence");
+  const actorDir = join(dir("serfs"), "actor");
+  const leverId = leverOf(card);
+
+  // Round 0: plan critique before expensive attempts (non-trivial pipelines).
+  if (kind !== "trivial") {
+    await runPlanPhase(config, card, actorDir);
+    const currentDir = findCardDir(config.root, card.id) ?? card.dir;
+    const planPath = join(currentDir, "plan.md");
+    if (existsSync(planPath)) {
+      const plan = readFileSync(planPath, "utf-8");
+      const { verdict } = await runCritic(config, parseCard(currentDir), plan);
+      if (verdict.plumbing) {
+        emit("critic.bypass", { card: card.id, reason: "plan-critique plumbing" });
+      } else if (verdict.verdict === "fail" && verdict.confidence > 0.7) {
+        emit("plan.rejected", { card: card.id, reasoning: verdict.reasoning.slice(0, 100) });
+        return "no-convergence"; // back to author, zero actor-execution tokens
+      }
+    }
+  }
+
+  let lastFailedCapability: string | null = null;
+  let consecutiveSameFailure = 0;
+  let lastOutput = "";
+
+  for (let round = 1; round <= maxRetries; round++) {
+    emit("round.started", { card: card.id, round, lever: leverId });
+    const currentCardDir = findCardDir(config.root, card.id) ?? card.dir;
+    const feedback = round > 1
+      ? "CONVERGENCE ROUND " + round + ". Previous rounds did not converge. Address the critic's issues with the lever in mind."
+      : "";
+    const specialistDir = consecutiveSameFailure >= 2 ? lastFailedCapability : null;
+    void specialistDir;
+    const { run, gate } = await runSerfOnCard({
+      serfDir: actorDir,
+      cardDir: currentCardDir,
+      transport: config.transport,
+      container: config.container,
+      vars: {
+        feedback,
+        lever: leverId ? "pull the lever — your work is measured by its instrument" : "",
+      },
+    });
+    lastOutput = run.output;
+    recordSpend(parseCard(currentCardDir), run.tokensUsed);
+    const green = gate.green;
+    emit(green ? "verification.green" : "verification.red", { card: card.id, round, command: gate.command });
+
+    // Critic evaluates (on green output) or TRIAGES (on red — cheap redirect).
+    const { verdict, verdictPath } = await runCritic(config, parseCard(currentCardDir), lastOutput);
+    emit("critic.verdict", { card: card.id, round, verdict: verdict.verdict, confidence: verdict.confidence, plumbing: verdict.plumbing, verdictPath });
+    if (verdict.plumbing) {
+      emit("critic.bypass", { card: card.id, round, reason: "plumbing-unparseable after repair" });
+    }
+
+    const converged = green && (verdict.plumbing || verdict.verdict !== "fail" || verdict.confidence <= 0.7);
+    if (converged) {
+      if (leverId) await conf.strengthen(config.root, leverId, 0.6, 2, "round " + round + ": converged with evidence");
+      emit("converged", { card: card.id, round });
+      return "converged";
+    }
+
+    // Non-converged: triage via critic — extract the missing capability
+    const triage = await runCritic(
+      config,
+      parseCard(currentCardDir),
+      "TRIAGE: the actor's attempt did not pass. Answer: is this fixable by the actor (skill/execution), or is the card missing a prerequisite/external capability? Cite the specific missing artifact or capability.\n\nOUTPUT:\n" + lastOutput.slice(0, 2000),
+    );
+    const capabilityMatch = triage.verdict.reasoning.match(/missing[:\s]+([A-Za-z0-9 _-]{4,60})/i);
+    const missingCapability = capabilityMatch?.[1]?.trim() ?? null;
+    if (missingCapability && missingCapability === lastFailedCapability) {
+      consecutiveSameFailure += 1;
+    } else {
+      consecutiveSameFailure = 1;
+      lastFailedCapability = missingCapability;
+    }
+
+    // Spawn trigger: same missing capability twice → spawn a specialist child
+    if (consecutiveSameFailure >= 2 && missingCapability) {
+      const specialistName = "specialist-" + slugify(missingCapability).slice(0, 24) + "-" + Date.now().toString(36).slice(-4);
+      const { registerChild } = await import("./bandit");
+      registerChild(config.root, "actor", "specialists/" + specialistName, {
+        spawnedBy: "actor",
+        cardId: card.id,
+        problem: "Two rounds failed on missing capability: " + missingCapability,
+        motivation: leverOf(card) ?? "convergence rounds",
+        createdAt: new Date().toISOString(),
+      });
+      emit("specialist.spawned", { card: card.id, specialist: specialistName, capability: missingCapability });
+      consecutiveSameFailure = 0;
+    }
+
+    // Ledger: round pulled, needle flat
+    if (leverId) conf.weaken(config.root, leverId, "round " + round + ": flat — " + triage.verdict.reasoning.slice(0, 60));
+  }
+
+  return "no-convergence";
+}
+
 export async function runLoop(config: LoopConfig): Promise<{ processed: number; completed: number; failed: number }> {
   _root = config.root;
   ensureScaffold();
@@ -244,45 +365,19 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
       await runPlanPhase(config, card, join(dir("serfs"), "actor"));
     }
 
-    let green = false;
-    let lastOutput = "";
-    for (let attempt = 1; attempt <= maxRetries && !green; attempt++) {
-      emit("attempt.started", { card: card.id, attempt });
-      const actorDir = join(dir("serfs"), "actor");
-      // the card moved to in-progress before this run — re-resolve its dir
-      const currentCardDir = findCardDir(config.root, card.id) ?? card.dir;
-      const { run, gate, unchangedGate } = await runSerfOnCard({
-        serfDir: actorDir,
-        cardDir: currentCardDir,
-        transport: config.transport,
-        container: config.container,
-        vars: { feedback: attempt > 1 ? "Previous attempt failed verification. Change something." : "" },
-      });
-      lastOutput = run.output;
-      recordSpend(parseCard(findCardDir(config.root, card.id) ?? card.dir), run.tokensUsed);
-      green = gate.green;
-      emit(green ? "verification.green" : "verification.red", { card: card.id, attempt, command: gate.command, unchangedGate });
-    }
-
-    // Critic gate: on green verification the critic judges; plumbing failures
-    // after repair = bypass with documentation (never fail the actor).
-    if (green) {
-      const { verdict, verdictPath } = await runCritic(config, parseCard(findCardDir(config.root, card.id) ?? card.dir), lastOutput);
-      emit("critic.verdict", { card: card.id, verdict: verdict.verdict, confidence: verdict.confidence, plumbing: verdict.plumbing, verdictPath });
-      if (verdict.plumbing) {
-        emit("critic.bypass", { card: card.id, reason: "plumbing-unparseable after repair" });
-      } else if (verdict.verdict === "fail" && verdict.confidence > 0.7) {
-        green = false;
-      }
-    }
-
-    if (green) {
+    // Convergence rounds: bounded actor-critic dialogue refereed by the lever.
+    // Each round: actor pulls → verify gate → critic evaluates → ledger update.
+    // 3 rounds max; escalation to a spawned specialist on repeated same-
+    // capability failure; final round failure → review (master escalation).
+    const result = await convergeCard(config, card, maxRetries, kind);
+    processed += 0; // counted above
+    if (result === "converged") {
       moveCard(card, "done");
       emit("card.completed", { card: card.id });
       completed += 1;
     } else {
       moveCard(card, "review");
-      emit("task.failed", { card: card.id, reason: "max-retries", attempts: maxRetries });
+      emit("task.failed", { card: card.id, reason: "no-convergence", attempts: maxRetries });
       failed += 1;
     }
   }

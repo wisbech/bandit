@@ -223,3 +223,22 @@ export function renderBandit(root: string): string {
   }
   return lines.join("\n");
 }
+// ── CHILD REGISTRY (fractal spawning — v2 graph heritage) ──
+
+export interface ChildOrigin {
+  spawnedBy: string;
+  cardId?: string;
+  problem: string;
+  motivation: string;
+  createdAt: string;
+}
+
+export function registerChild(root: string, parent: string, childName: string, origin: ChildOrigin): void {
+  const d = join(root, ".bandit", "serfs", parent, "children");
+  mkdirSync(d, { recursive: true });
+  // child folder gets its origin; parent's children/ gets the registry entry
+  const childDir = join(root, ".bandit", "serfs", childName);
+  mkdirSync(childDir, { recursive: true });
+  writeFileSync(join(childDir, "origin.md"), `spawned_by: ${origin.spawnedBy}\ncard: ${origin.cardId ?? ""}\ncreated: ${origin.createdAt}\n\n## Problem\n${origin.problem}\n\n## Parent motivation\n${origin.motivation}\n`);
+  writeFileSync(join(d, `${childName.replace("specialists/", "")}.md`), `# ${childName}\n\nspawned_by: ${origin.spawnedBy}\ncard: ${origin.cardId ?? ""}\nproblem: ${origin.problem}\n`);
+}
