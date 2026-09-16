@@ -100,17 +100,23 @@ const COMMANDS: Command[] = [
       // Single-runner lock (the suspended-pid fix): a stale lock from a dead
       // process is auto-cleared; a live one refuses with its pid.
       const lockPath = join(banditDir(), "run.lock");
+      let visitor = false;
       if (existsSync(lockPath)) {
         try {
           const lockPid = parseInt(readFileSync(lockPath, "utf-8").trim(), 10);
           process.kill(lockPid, 0); // throws if dead
-          fail(`bandit is already holding the board (pid ${lockPid}) — it is watching, not stuck. To run a fresh pass: kill ${lockPid} && bandit .`);
+          // Already running = the factory is live = open the door. You walk in
+          // as a visitor; no error, no kill needed.
+          visitor = true;
+          console.log("  ✓ bandit is live (pid " + lockPid + ") — opening the door (panes auto-open)");
         } catch {
           console.log("  · stale lock cleared (previous run died)");
         }
       }
-      writeFileSync(lockPath, String(process.pid));
-      process.on("SIGINT", () => { try { unlinkSync(lockPath); } catch {} process.exit(0); });
+      if (!visitor) {
+        writeFileSync(lockPath, String(process.pid));
+        process.on("SIGINT", () => { try { unlinkSync(lockPath); } catch {} process.exit(0); });
+      }
       const cfg = JSON.parse(readFileSync(join(banditDir(), "config.json"), "utf-8"));
 
       // ── Launch config: flags > interactive picker > config.json ──
@@ -172,7 +178,7 @@ const COMMANDS: Command[] = [
         once: args.includes("--once"),
       });
       console.log(`\n  processed: ${result.processed} | done: ${result.completed} | failed: ${result.failed}\n`);
-      try { unlinkSync(lockPath); } catch {}
+      if (!isVisitor) { try { unlinkSync(lockPath); } catch {} }
     },
   },
   {
