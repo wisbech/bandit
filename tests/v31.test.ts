@@ -58,6 +58,7 @@ describe("V3-1: critic gate in the loop", () => {
     stub("stub-a.sh", greenOutput());
     // critic stub passes with confidence
     const result = await runLoop({
+      once: true,
       root,
       transport: { kind: "headless", command: join(root, "stub-a.sh"), args: [] },
       maxRetries: 2,
@@ -72,6 +73,7 @@ describe("V3-1: critic gate in the loop", () => {
     seedCard("critic-broken");
     // critic stub emits garbage (plumbing failure every time)
     const result = await runLoop({
+      once: true,
       root,
       transport: { kind: "headless", command: stub("stub-b.sh", greenOutput()), args: [] },
       maxRetries: 1,
@@ -87,6 +89,7 @@ describe("V3-1: budget hard stop", () => {
   test("card with exhausted budget is skipped", async () => {
     seedCard("broke-card", "lifetimeTokensUsed: 999999\nbudgetLimit: 100\n");
     const result = await runLoop({
+      once: true,
       root,
       transport: { kind: "headless", command: stub("stub-c.sh", greenOutput()), args: [] },
     });
@@ -97,6 +100,7 @@ describe("V3-1: budget hard stop", () => {
   test("lifetimeTokensUsed accumulates on the card after a run", async () => {
     seedCard("spend-card");
     await runLoop({
+      once: true,
       root,
       transport: { kind: "headless", command: stub("stub-d.sh", greenOutput()), args: [] },
     });
@@ -113,6 +117,7 @@ describe("V3-1: plan phase", () => {
     mkdirSync(cardDir, { recursive: true });
     writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: planned-card\n---\n# Planned\n\n${"- refactor module".repeat(30)}\n\n${Array.from({ length: 6 }, (_, i) => `- criterion ${i} is verifiable`).join("\n")}\n`);
     await runLoop({
+      once: true,
       root,
       transport: { kind: "headless", command: stub("stub-e.sh", greenOutput()), args: [] },
       maxRetries: 1,

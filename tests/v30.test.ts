@@ -118,6 +118,7 @@ describe("V3-0: end-to-end trivial card through composed runner", () => {
     chmodSync(stubPath, 0o755);
 
     const result = await runLoop({
+      once: true,
       root,
       transport: { kind: "headless", command: stubPath, args: [] },
       maxRetries: 2,
@@ -145,6 +146,7 @@ describe("V3-0: end-to-end trivial card through composed runner", () => {
     chmodSync(stubPath, 0o755);
 
     const result = await runLoop({
+      once: true,
       root,
       transport: { kind: "headless", command: stubPath, args: [] },
       maxRetries: 2,
