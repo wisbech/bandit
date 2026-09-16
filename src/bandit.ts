@@ -206,7 +206,7 @@ export function readBanditEvents(root: string, limit = 20): { type: string; id: 
 
 export function renderBandit(root: string): string {
   const readiness = banditReady(root);
-  const lines: string[] = ["═══ BANDIT BANDIT GOVERNOR ═══════════════════════"];
+  const lines: string[] = ["═══ BANDIT GOVERNOR ═══════════════════════"];
   lines.push(`  readiness: ${readiness.ready ? "READY — thompson sampling active" : "not yet — bucket-brigade governs"}`);
   lines.push(`  trusted measures: ${readiness.trustedMeasures} (need ≥1 corroborated/established)`);
   lines.push(`  qualified levers: ${readiness.qualifiedLevers} (need ≥2 with ≥${MIN_PULLS} pulls)`);
