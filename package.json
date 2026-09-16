@@ -1,0 +1,16 @@
+{
+  "name": "bandit",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "bandit": "bin/bandit.js"
+  },
+  "scripts": {
+    "build": "bun build src/cli.ts --outdir bin --target bun",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "bun-types": "^1.4.2"
+  }
+}
