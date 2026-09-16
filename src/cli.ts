@@ -104,7 +104,7 @@ const COMMANDS: Command[] = [
         try {
           const lockPid = parseInt(readFileSync(lockPath, "utf-8").trim(), 10);
           process.kill(lockPid, 0); // throws if dead
-          fail(`factory already running (pid ${lockPid}). Kill it or run: kill ${lockPid}`);
+          fail(`bandit is already holding the board (pid ${lockPid}) — it is watching, not stuck. To run a fresh pass: kill ${lockPid} && bandit .`);
         } catch {
           console.log("  · stale lock cleared (previous run died)");
         }
@@ -366,6 +366,7 @@ const COMMANDS: Command[] = [
 
 async function main(): Promise<void> {
   const [cmd, ...args] = process.argv.slice(2);
+  if (cmd === "--help" || cmd === "-h") { await COMMANDS.find((c) => c.name === "help")!.fn([]); return; }
   const command = COMMANDS.find((c) => c.name === cmd);
   if (!command) {
     // `bandit .` = init (if needed) + start
