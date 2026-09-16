@@ -169,6 +169,7 @@ const COMMANDS: Command[] = [
         transport: { kind: cfg.transport ?? "headless", command: cfg.command ?? "opencode", args: cfg.args ?? ["run"] },
         container: cfg.container || undefined,
         maxRetries: cfg.maxRetries ?? 3,
+        once: args.includes("--once"),
       });
       console.log(`\n  processed: ${result.processed} | done: ${result.completed} | failed: ${result.failed}\n`);
       try { unlinkSync(lockPath); } catch {}

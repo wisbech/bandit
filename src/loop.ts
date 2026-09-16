@@ -302,5 +302,35 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     }
   } catch {}
 
+  // Persistent mode: when not --once, watch the board for new work instead of
+  // exiting. fs.watch on backlog (event-driven — no polling). New cards or
+  // review→backlog demotions wake the loop; each wake runs one full pass.
+  if (!config.once) {
+    const backlogDir = join(config.root, ".bandit", "board", "backlog");
+    const inProgressDir = join(config.root, ".bandit", "board", "in-progress");
+    console.log("  ◌ board drained — watching for new cards (event-driven, Ctrl+C to stop)\n");
+    let waking = false;
+    const wake = async () => {
+      if (cardsIn("backlog").length === 0 && cardsIn("in-progress").length === 0) return;
+      try {
+        await runLoop({ ...config, once: true });
+      } catch {}
+    };
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const onBoardEvent = () => {
+      if (waking) return;
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => { void wake(); }, 500);
+    };
+    for (const d of [backlogDir, inProgressDir]) {
+      try {
+        const { watch } = await import("node:fs");
+        watch(d, { persistent: true }, onBoardEvent);
+      } catch {}
+    }
+    // hold the loop open
+    await new Promise<void>(() => {});
+  }
+
   return { processed, completed, failed };
 }
