@@ -178,7 +178,7 @@ const COMMANDS: Command[] = [
         once: args.includes("--once"),
       });
       console.log(`\n  processed: ${result.processed} | done: ${result.completed} | failed: ${result.failed}\n`);
-      if (!isVisitor) { try { unlinkSync(lockPath); } catch {} }
+      if (!visitor) { try { unlinkSync(lockPath); } catch {} }
     },
   },
   {
@@ -189,6 +189,79 @@ const COMMANDS: Command[] = [
       const events = readEvents();
       for (const e of events.slice(-30)) console.log(`  ${e.ts} ${e.type} ${JSON.stringify(Object.fromEntries(Object.entries(e).filter(([k]) => !["type", "ts"].includes(k)))).slice(0, 120)}`);
       if (events.length === 0) console.log("  (no events)");
+    },
+  },
+  {
+    name: "chat",
+    summary: "walk into a serf's pane and talk — bandit chat [actor|critic|master] [--agent X]",
+    fn: async (args) => {
+      const herdr = await import("./herdr");
+      if (!herdr.isHerdrRunning()) fail("herdr not running — start it in another terminal: `herdr`");
+      if (!(await herdr.ping().catch(() => false))) fail("herdr socket not responding");
+      const roleFlag = args.find((a) => !a.startsWith("--")) ?? "";
+      const roles = roleFlag ? [roleFlag] : ["actor", "critic", "master"];
+      const agentFlag = args.indexOf("--agent");
+      const chatAgent = agentFlag >= 0 ? args[agentFlag + 1] : null;
+
+      const workspaces = await herdr.listWorkspaces();
+      const ws = workspaces.find((w) => w.label === "bandit");
+      if (!ws) fail("no bandit workspace in herdr — run bandit . first");
+      const panes = await herdr.listPanes(ws.workspace_id);
+      const livePanes = [];
+      for (const p of panes) {
+        if (await herdr.isAgentAlive(p.pane_id).catch(() => false)) livePanes.push(p);
+      }
+
+      const role = roleFlag || (livePanes.length === 1 ? "actor" : null);
+      if (!role) {
+        // interactive pick among live panes
+        console.log("\n  Live serfs:");
+        for (const p of livePanes) console.log(`    ${p.pane_id}`);
+        console.log(`\n  usage: bandit chat <role>   (roles: actor, critic, master)\n`);
+        return;
+      }
+
+      // find the pane whose injected prompt mentioned this role (label matches)
+      const regPath = join(banditDir(), "pane-roles.json");
+      const reg = existsSync(regPath) ? JSON.parse(readFileSync(regPath, "utf-8")) : {};
+      const registeredPaneId = reg[role];
+      let target = livePanes.find((p) => p.pane_id === registeredPaneId);
+      if (!target) {
+        const panesCmd = COMMANDS.find((c) => c.name === "panes")!;
+        await panesCmd.fn([role]);
+        const refreshedPanes = await herdr.listPanes(ws.workspace_id);
+        const reg2 = existsSync(regPath) ? JSON.parse(readFileSync(regPath, "utf-8")) : {};
+        target = refreshedPanes.find((p) => p.pane_id === reg2[role]);
+      }
+      if (!target) fail(`no live pane for role '${role}' — run bandit panes ${role}`);
+
+      console.log(`\n  ═══ BANDIT CHAT ═══════════════════════`);
+      console.log(`  serf: ${role}`);
+      console.log(`  pane: ${target.pane_id} (live)`);
+
+      if (chatAgent) {
+        // Human wants a DIFFERENT harness for the conversation: spawn it in a
+        // side pane, seeded with the serf's folder (prompt + state + journal).
+        const cfg = JSON.parse(readFileSync(join(banditDir(), "config.json"), "utf-8"));
+        const model = extractModelArg(cfg.args ?? []);
+        const roleDir = join(banditDir(), "serfs", role);
+        const seedPrompt = `You are speaking AS the ${role} serf of this bandit factory. Adopt its identity fully.\n\nIdentity and standing prompt: .bandit/serfs/${role}/prompt.md\nState: .bandit/serfs/${role}/state.md\nJournal: .bandit/serfs/${role}/journal/\n\nRead those first, then converse with the human.`
+        const tab = await herdr.createTab(ws.workspace_id, `chat-${role}`, process.cwd());
+        const pane = await herdr.splitPaneInTab(tab.tab_id, "right", `chat-${role}`);
+        const argPairs = model && chatAgent === cfg.command ? ["--model", model] : [];
+        const argStr = argPairs.map((a) => JSON.stringify(a)).join(" ");
+        await herdr.sendCommand(pane.pane_id, `cd ${JSON.stringify(process.cwd())} && ${chatAgent} ${argStr}`.trim());
+        await new Promise((r) => setTimeout(r, 10_000));
+        if (!(await herdr.isAgentAlive(pane.pane_id).catch(() => false))) {
+          console.log(`  ⚠ ${chatAgent} did not boot in chat pane ${pane.pane_id}`);
+          return;
+        }
+        await herdr.sendCommand(pane.pane_id, seedPrompt);
+        console.log(`  ✓ chat with ${role} via ${chatAgent}: pane ${pane.pane_id} — switch to herdr`);
+      } else {
+        console.log(`  → switch to herdr, pane ${target.pane_id} — type to your ${role} directly`);
+        console.log(`  · to chat via a different harness: bandit chat ${role} --agent <agent>\n`);
+      }
     },
   },
   {
@@ -277,6 +350,11 @@ const COMMANDS: Command[] = [
         }
         await herdr.sendCommand(pane.pane_id, `Read ${promptFile} and adopt that role fully. You are the ${role} bandit of this factory. ENVIRONMENT DISCIPLINE: every file you create — scripts, probes, downloads, scratch, data — goes under the project directory (cwd or .bandit/tmp). NEVER write to /tmp or anywhere outside the project. Use the project's virtual environment (uv/bun); never install globally. ${role === "critic" ? "Wait for the harness to show you work to evaluate." : "Wait for the harness to hand you cards."}`);
         const aliveAfter = await herdr.isAgentAlive(pane.pane_id).catch(() => false);
+        // role->pane registry (herdr's pane.list doesn't return labels)
+        const regPath = join(banditDir(), "pane-roles.json");
+        const reg = existsSync(regPath) ? JSON.parse(readFileSync(regPath, "utf-8")) : {};
+        reg[role] = aliveAfter ? pane.pane_id : reg[role];
+        writeFileSync(regPath, JSON.stringify(reg, null, 2));
         console.log(`  ✓ ${role}: pane ${pane.pane_id} launched + prompt injected (alive: ${aliveAfter})`);
       }
       console.log(`  → workspace: bandit / tab: serfs — switch to herdr to watch and steer\n`);
