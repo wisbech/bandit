@@ -475,9 +475,6 @@ const COMMANDS: Command[] = [
         // in cwd, never /tmp), venv discipline exported, agent launches
         // INTERACTIVE (no initial prompt on the command line), then wait for
         // boot, then inject the prompt as a typed message.
-        // Launch args come from agentLaunch(agent, model, "tui") — the one
-        // place harness differences live (pi: --provider/--model; opencode:
-        // run --model; claude: --model).
         const model = extractModelArg(cfg.args ?? []);
         const tuiArgs = agentLaunch(cfg.command ?? "opencode", model, "tui");
         const argStr = tuiArgs.map((a) => JSON.stringify(a)).join(" ");
@@ -485,12 +482,23 @@ const COMMANDS: Command[] = [
         const scratch = join(process.cwd(), ".bandit", "tmp");
         mkdirSync(scratch, { recursive: true });
         const venvPrefix = cfg.venvPrefix ?? "uv venv if missing; never install globally; use project venv/bin + local package managers (uv/bun)";
-        const launch = `cd ${JSON.stringify(process.cwd())} && mkdir -p .bandit/tmp && export TMPDIR=${JSON.stringify(scratch)} && echo "${venvPrefix}" > /dev/null && ${tuiCommand} ${argStr}`.trim();
-        await herdr.sendCommand(pane.pane_id, launch);
-        // v2 waited 10s for the TUI to boot before typing anything.
-        await new Promise((r) => setTimeout(r, 10_000));
-        // Gate: only inject if the agent TUI is actually alive.
-        const alive = await herdr.isAgentAlive(pane.pane_id).catch(() => false);
+        // Guard against the fresh-split pane race: opencode/OpenTUI crashes
+        // (EXC_BREAKPOINT in bufferDrawTextBufferView) when the TUI draws
+        // before the pty has real dimensions. Wait for a nonzero size via a
+        // pty-size poll before exec'ing the agent, then set LINES/COLUMNS.
+        const sizeGuard = `while true; do C=$(stty size 2>/dev/null | cut -d" " -f2); L=$(stty size 2>/dev/null | cut -d" " -f1); [ -n "$C" ] && [ "$C" -gt 2 ] && break; sleep 0.3; done; export LINES=$L COLUMNS=$C`;
+        const launch = `cd ${JSON.stringify(process.cwd())} && mkdir -p .bandit/tmp && export TMPDIR=${JSON.stringify(scratch)} && ${sizeGuard} && ${tuiCommand} ${argStr}`.trim();
+        // Boot with one retry: a flaky boot (TUI crash on fresh pane) gets a
+        // second chance before we give up — the pane shell survives the crash.
+        let alive = false;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          await herdr.sendCommand(pane.pane_id, launch);
+          // v2 waited 10s for the TUI to boot before typing anything.
+          await new Promise((r) => setTimeout(r, 10_000));
+          alive = await herdr.isAgentAlive(pane.pane_id).catch(() => false);
+          if (alive) break;
+          if (attempt === 1) console.log(`  · ${role}: boot attempt 1 failed in ${pane.pane_id} — retrying (flaky TUI boot)`);
+        }
         if (!alive) {
           console.log(`  ⚠ ${role}: agent did not boot in pane ${pane.pane_id} — skipping injection (check pane in herdr)`);
           continue;
