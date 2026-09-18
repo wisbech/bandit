@@ -24,22 +24,34 @@ interface RunningAgent {
   model: string;
 }
 
-// Read the process table for agent CLI processes (opencode/claude/codex/pi)
-// with a sizeable prompt argument — these are the factory's workers.
+// Read the process table for agent CLI processes (opencode/claude/codex/pi/
+// aider) — these are the factory's workers. pi runs as `pi --provider X
+// --model Y ... -p`; opencode as `opencode run ...`; claude as `claude
+// --print/-p`; codex/aider as themselves.
 function runningAgents(): RunningAgent[] {
   try {
-    const out = execSync("ps -axo pid,lstart,command | grep -E 'opencode (run|--model)|claude (--print|-p)' | grep -v grep", { encoding: "utf-8" });
+    const out = execSync(
+      "ps -axo pid,lstart,command | grep -E 'opencode (run|--model)|claude .*(--print| -p)|pi (-p|--provider|--model)|codex (exec|--model)|aider' | grep -v grep",
+      { encoding: "utf-8" },
+    );
     return out.trim().split("\n").filter(Boolean).map((line) => {
       const parts = line.trim().split(/\s+/);
       const pid = parts[0];
       const command = parts.slice(3).join(" ");
       const modelMatch = command.match(/--model\s+(\S+)/);
       // card hint: which bandit prompt it carries
-      const role = command.includes("You are actor") ? "actor" : command.includes("critic") ? "critic" : command.includes("master") ? "master" : "?";
+      const role = command.includes("You are actor") ? "actor"
+        : command.includes("critic") ? "critic"
+        : command.includes("master") ? "master" : "?";
+      const agent = command.startsWith("opencode") ? "opencode"
+        : command.startsWith("claude") ? "claude"
+        : command.startsWith("pi") ? "pi"
+        : command.startsWith("codex") ? "codex"
+        : command.startsWith("aider") ? "aider" : "?";
       return {
         pid,
         started: `${parts[4]} ${parts[5]}`,
-        cardHint: `${role} · ${modelMatch?.[1] ?? "default"}`,
+        cardHint: `${role} · ${agent}`,
         model: modelMatch?.[1] ?? "default",
       };
     });

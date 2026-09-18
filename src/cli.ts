@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { execSync } from "node:child_process";
 import { runLoop, cardsIn } from "./loop";
 
 // cli.ts — command table (~30 lines). No switch-casing.
@@ -16,6 +17,65 @@ interface Command {
 
 function banditDir(): string {
   return join(process.cwd(), ".bandit");
+}
+
+// Serf roles that actually exist in this factory (have a prompt.md).
+function listSerfRoles(): string[] {
+  const serfsDir = join(banditDir(), "serfs");
+  try {
+    return readdirSync(serfsDir)
+      .filter((n) => existsSync(join(serfsDir, n, "prompt.md")))
+      .sort();
+  } catch {
+    return ["actor", "critic", "master"];
+  }
+}
+
+// Harnesses actually installed on this machine (checked live), with the
+// configured/last-used one first so the picker default is always valid.
+function listAgents(): string[] {
+  const all = ["opencode", "pi", "claude", "codex", "aider"];
+  const installed: string[] = [];
+  for (const a of all) {
+    try {
+      execSync(`command -v ${a}`, { stdio: "ignore" });
+      installed.push(a);
+    } catch {}
+  }
+  if (installed.length === 0) return ["opencode"];
+  return installed;
+}
+
+// ── Per-agent launch shapes (the one place harness differences live) ──
+// headless run: <args> + prompt on argv; interactive pane: <tui> <args>.
+// Model is normalized to provider/id form everywhere: opencode wants
+// "ollama/x", pi wants "--provider ollama --model x" but ALSO accepts
+// "ollama/x", claude accepts a --model string directly.
+function agentLaunch(agent: string, model: string | null, mode: "headless" | "tui"): string[] {
+  const modelPair = (fmt: (m: string) => string[]): string[] => (model ? fmt(model) : []);
+  if (agent === "pi") {
+    if (mode === "headless") return [...modelPair((m) => m.includes("/") ? ["--provider", m.split("/")[0], "--model", m.split("/")[1]] : ["--model", m]), "--no-session", "-p"];
+    return modelPair((m) => m.includes("/") ? ["--provider", m.split("/")[0], "--model", m.split("/")[1]] : ["--model", m]);
+  }
+  if (agent === "claude") {
+    if (mode === "headless") return modelPair((m) => ["--model", m.includes("/") ? m.split("/")[1] : m, "--print"]);
+    return modelPair((m) => ["--model", m.includes("/") ? m.split("/")[1] : m]);
+  }
+  // opencode / codex / aider: default harness shape
+  if (mode === "headless") return modelPair((m) => ["run", "--model", m]);
+  return modelPair((m) => ["run", "--model", m]);
+}
+
+// Live ollama catalog (localhost:11434) — every model there works with every
+// agent harness, so the picker lists them all in provider/id form.
+function listOllamaModels(): string[] {
+  try {
+    const raw = execSync("curl -s --max-time 2 http://localhost:11434/api/tags", { encoding: "utf-8" });
+    const tags = JSON.parse(raw).models as { name: string }[];
+    return tags.map((m) => m.name).sort();
+  } catch {
+    return [];
+  }
 }
 
 function fail(msg: string): never {
@@ -83,7 +143,7 @@ const COMMANDS: Command[] = [
   },
   {
     name: "start",
-    summary: "run the factory loop over the board (--model/--agent to override, else config; interactive picker when TTY)",
+    summary: "run the factory loop over the board (--model/--agent/--visible to override, else config; interactive picker when TTY)",
     fn: async (args) => {
       if (!existsSync(banditDir())) fail("no .bandit/ — run bandit init");
       // Guard: v2 bandit running in this project? Two factories on one board = chaos.
@@ -127,45 +187,76 @@ const COMMANDS: Command[] = [
       if (interactive) {
         // arrow-key prompts, serf-style
         const { choose } = await import("./choose");
-        const agents = ["opencode", "claude", "codex", "pi", "aider"].filter((a) => a === cfg.command || !cfg.command || a !== cfg.command);
-        const currentModel = extractModelArg(cfg.args ?? []);
-        cfg.command = await choose("Which agent?", [
+        const installed = listAgents();
+        const agentChoices = [
           { label: `default: ${cfg.command ?? "opencode"}`, value: cfg.command ?? "opencode" },
-          ...agents.map((a) => ({ label: a, value: a })),
-        ]);
-        const model = await choose("Which model?", [
+          ...installed.filter((a) => a !== cfg.command).map((a) => ({ label: a, value: a })),
+        ];
+        cfg.command = await choose("Which agent?", agentChoices);
+        const currentModel = extractModelArg(cfg.args ?? []);
+        const ollamaModels = listOllamaModels();
+        const modelChoices = [
           { label: `default: ${currentModel ?? "(agent default)"}`, value: currentModel ?? "" },
-          { label: "glm-5.3-flash:cloud (ollama cloud)", value: "ollama/glm-5.3-flash:cloud" },
-          { label: "qwen3.5 (local ollama)", value: "ollama/qwen3.5" },
+          ...ollamaModels.map((m) => ({ label: `ollama/${m}`, value: `ollama/${m}` })),
+        ];
+        const model = await choose("Which model? (all ollama models work with every agent)", modelChoices);
+        cfg.args = agentLaunch(cfg.command, model, "headless").filter((a) => a !== "-p" && a !== "--no-session" && a !== "--print");
+        // ── Visibility picker: which serfs get herdr panes (watch + steer) ──
+        const allSerfs = listSerfRoles();
+        const visibility = await choose("Which serfs do you want to SEE while it runs?", [
+          { label: "none — headless, watch via `bandit watch`", value: [] as string[] },
+          ...allSerfs.map((r) => ({ label: r, value: [r] as string[] })),
+          { label: `all — ${allSerfs.join(" + ")}`, value: allSerfs },
         ]);
-        cfg.args = model ? ["run", "--model", model] : ["run"];
+        cfg.visibleSerfs = visibility;
         writeFileSync(join(banditDir(), "config.json"), JSON.stringify(cfg, null, 2));
-        console.log(`  → saved: ${cfg.command} ${cfg.args.join(" ")}\n`);
+        console.log(`  → saved: ${cfg.command} ${cfg.args.join(" ")} · visible: ${visibility.length ? visibility.join(" + ") : "none (headless)"}\n`);
       } else {
         if (agentFlag >= 0 && args[agentFlag + 1]) cfg.command = args[agentFlag + 1];
-        if (modelFlag >= 0 && args[modelFlag + 1]) cfg.args = ["run", "--model", args[modelFlag + 1]];
-        if (agentFlag >= 0 || modelFlag >= 0) {
+        if (modelFlag >= 0 && args[modelFlag + 1]) cfg.args = agentLaunch(cfg.command, args[modelFlag + 1], "headless").filter((a) => a !== "-p" && a !== "--no-session" && a !== "--print");
+        // --visible actor,critic | --visible all | --visible none
+        const visibleFlag = args.indexOf("--visible");
+        if (visibleFlag >= 0) {
+          const raw = (args[visibleFlag + 1] ?? "").trim();
+          cfg.visibleSerfs = raw === "all" ? listSerfRoles()
+            : raw === "none" ? []
+            : raw.split(",").map((s) => s.trim()).filter((s) => s && listSerfRoles().includes(s));
+        }
+        if (agentFlag >= 0 || modelFlag >= 0 || visibleFlag >= 0) {
           writeFileSync(join(banditDir(), "config.json"), JSON.stringify(cfg, null, 2));
         }
       }
 
-      // ── Panes auto-open when herdr is up: serfs are visible+steerable by default ──
+      // ── Panes auto-open for the serfs chosen visible (cfg.visibleSerfs) ──
       const herdr = await import("./herdr");
-      if (herdr.isHerdrRunning() && (await herdr.ping().catch(() => false))) {
+      // Legacy configs (no visibleSerfs) keep the old default: actor + critic.
+      const wanted = (cfg.visibleSerfs !== undefined
+        ? (cfg.visibleSerfs as string[]).filter((r) => listSerfRoles().includes(r))
+        : ["actor", "critic"]);
+      if (herdr.isHerdrRunning() && (await herdr.ping().catch(() => false)) && wanted.length > 0) {
         try {
           const workspaces = await herdr.listWorkspaces();
           const ws = workspaces.find((w) => w.label === "bandit");
-          const allPanes = ws ? await herdr.listPanes(ws.workspace_id) : [];
-          const existingPanes = [];
-          for (const p of allPanes) {
-            if (await herdr.isAgentAlive(p.pane_id).catch(() => false)) existingPanes.push(p);
-          }
-          if (ws && existingPanes.length > 0) {
-            console.log(`  ✓ panes already open (${existingPanes.length} live serfs in herdr — switch there to watch/steer)`);
-          } else {
+          if (!ws) {
             const panesCmd = COMMANDS.find((c) => c.name === "panes")!;
-            await panesCmd.fn(["actor,critic"]);
-            console.log("  → serfs visible in herdr — switch there to watch/steer them mid-run");
+            await panesCmd.fn([wanted.join(",")]);
+            console.log(`  → visible serfs: ${wanted.join(" + ")} — switch to herdr to watch/steer them mid-run`);
+          } else {
+            const regPath = join(banditDir(), "pane-roles.json");
+            const reg = existsSync(regPath) ? JSON.parse(readFileSync(regPath, "utf-8")) : {};
+            const missing = [];
+            for (const role of wanted) {
+              const registered = reg[role];
+              const alive = registered ? await herdr.isAgentAlive(registered).catch(() => false) : false;
+              if (!alive) missing.push(role);
+            }
+            if (missing.length === 0) {
+              console.log(`  ✓ panes already open (${wanted.join(" + ")} live in herdr — switch there to watch/steer)`);
+            } else {
+              const panesCmd = COMMANDS.find((c) => c.name === "panes")!;
+              await panesCmd.fn([missing.join(",")]);
+              console.log(`  → visible serfs: ${missing.join(" + ")} — switch to herdr to watch/steer them mid-run`);
+            }
           }
         } catch {}
       }
@@ -248,7 +339,7 @@ const COMMANDS: Command[] = [
         const seedPrompt = `You are speaking AS the ${role} serf of this bandit factory. Adopt its identity fully.\n\nIdentity and standing prompt: .bandit/serfs/${role}/prompt.md\nState: .bandit/serfs/${role}/state.md\nJournal: .bandit/serfs/${role}/journal/\n\nRead those first, then converse with the human.`
         const tab = await herdr.createTab(ws.workspace_id, `chat-${role}`, process.cwd());
         const pane = await herdr.splitPaneInTab(tab.tab_id, "right", `chat-${role}`);
-        const argPairs = model && chatAgent === cfg.command ? ["--model", model] : [];
+        const argPairs = agentLaunch(chatAgent, model, "tui");
         const argStr = argPairs.map((a) => JSON.stringify(a)).join(" ");
         await herdr.sendCommand(pane.pane_id, `cd ${JSON.stringify(process.cwd())} && ${chatAgent} ${argStr}`.trim());
         await new Promise((r) => setTimeout(r, 10_000));
@@ -331,10 +422,13 @@ const COMMANDS: Command[] = [
         // in cwd, never /tmp), venv discipline exported, agent launches
         // INTERACTIVE (no initial prompt on the command line), then wait for
         // boot, then inject the prompt as a typed message.
+        // Launch args come from agentLaunch(agent, model, "tui") — the one
+        // place harness differences live (pi: --provider/--model; opencode:
+        // run --model; claude: --model).
         const model = extractModelArg(cfg.args ?? []);
-        const argPairs = model ? ["--model", model] : [];
-        const argStr = argPairs.map((a) => JSON.stringify(a)).join(" ");
-        const tuiCommand = cfg.command === "opencode" ? "opencode" : cfg.command;
+        const tuiArgs = agentLaunch(cfg.command ?? "opencode", model, "tui");
+        const argStr = tuiArgs.map((a) => JSON.stringify(a)).join(" ");
+        const tuiCommand = cfg.command ?? "opencode";
         const scratch = join(process.cwd(), ".bandit", "tmp");
         mkdirSync(scratch, { recursive: true });
         const venvPrefix = cfg.venvPrefix ?? "uv venv if missing; never install globally; use project venv/bin + local package managers (uv/bun)";
