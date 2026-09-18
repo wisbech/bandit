@@ -104,13 +104,13 @@ Four protocols, one factory:
 | Protocol | How it runs | Good for |
 |---|---|---|
 | `headless` | spawn CLI with prompt on argv, gate on exit | opencode/claude/codex/pi one-shots |
-| `acp` | [Agent Client Protocol](https://agentclientprotocol.com) over stdio — Claude Code (via adapter), Codex, OMP, pi | the universal spoke; gateway auth routes to **any** Anthropic-protocol backend (verified: local ollama) |
+| `acp` | [Agent Client Protocol](https://agentclientprotocol.com) over stdio — Claude Code (via adapter), Codex, OMP, pi | the universal spoke; gateway auth routes to **any** Anthropic-protocol backend — local ollama, hosted gateways, or any provider speaking the Anthropic API shape |
 | `herdr` | live TUI in a pane | watching + steering mid-run |
 | `uhp` | HTTP `/v1/responses` | hosted endpoints |
 
 The ACP adapter speaks the [harness-remote](https://github.com/giuliastro/harness-remote) shape too — remote control planes are a profile, not a fork.
 
-**All ollama models work with every agent.** The interactive picker lists your live ollama catalog; pi, opencode and claude all take the same `provider/id` model spec.
+**Any LLM works with every agent.** Models are normalized to `provider/id` and routed per harness: the interactive picker lists your live ollama catalog, the ACP gateway accepts any Anthropic-protocol endpoint (self-hosted or hosted), and `uhp` reaches any `/v1/responses` host — pi, opencode and claude all take the same model spec. Local or cloud, open-weights or proprietary: swap the model, keep the factory.
 
 ## Visibility is a launch choice
 
