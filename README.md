@@ -195,6 +195,14 @@ bandit migrate         fold a v2 .serf/ into .bandit/
 
 Recursion is structural: a factory spawns child factories the way serfs spawn children — folders with lineage. Delegation flows down; established truth flows up. A project grows into a department grows into a company by mechanism first; the org chart is an emergent property of the tree.
 
+## Documentation
+
+| Doc | What it covers |
+|---|---|
+| [Architecture](docs/architecture.md) | the loop, folders, cards, events, pipelines, the critic, confidence, budgets, recursion |
+| [Harnesses](docs/harnesses.md) | adapter profiles, the four protocols, ACP lifecycle, gateway auth (any LLM backend), model routing |
+| [CLI reference](docs/cli.md) | every command with flags and examples |
+
 ## Tests
 
 55 tests, one command, no mocks of convenience — real stub transports, real card folders:
