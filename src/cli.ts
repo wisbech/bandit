@@ -440,7 +440,22 @@ const COMMANDS: Command[] = [
         const created = await herdr.createWorkspace("bandit", process.cwd());
         ws = { workspace_id: created.workspace_id, label: "bandit" };
       }
-      const tab = await herdr.createTab(ws.workspace_id, "serfs", process.cwd());
+      // Two tabs: management (master, critic) and workers (everything else).
+      // Keeps supervision separated from the crew — and keeps panes bigger.
+      const management = ["master", "critic"];
+      const tabFor = (role: string): Promise<{ tab_id: string }> =>
+        management.includes(role)
+          ? herdr.createTab(ws.workspace_id, "management", process.cwd())
+          : herdr.createTab(ws.workspace_id, "serfs", process.cwd());
+      const tabCache = new Map<string, { tab_id: string }>();
+      const tabIdFor = async (role: string): Promise<string> => {
+        const key = management.includes(role) ? "management" : "serfs";
+        if (!tabCache.has(key)) {
+          const t = await tabFor(role);
+          tabCache.set(key, t);
+        }
+        return tabCache.get(key)!.tab_id;
+      };
       console.log(`\n  ═══ BANDIT PANES ═══════════════════════`);
       for (const role of roles) {
         const roleDir = join(banditDir(), "serfs", role);
@@ -449,7 +464,8 @@ const COMMANDS: Command[] = [
           continue;
         }
         const promptFile = join(roleDir, "prompt.md");
-        const pane = await herdr.splitPaneInTab(tab.tab_id, "right", role);
+        const tab_id = await tabIdFor(role);
+        const pane = await herdr.splitPaneInTab(tab_id, "right", role);
         // v2 launch pattern: JSON-quote every arg (protects spaces/specials),
         // cd wrapper, TMPDIR redirected into the project (actors must scratch
         // in cwd, never /tmp), venv discipline exported, agent launches
@@ -484,7 +500,7 @@ const COMMANDS: Command[] = [
         writeFileSync(regPath, JSON.stringify(reg, null, 2));
         console.log(`  ✓ ${role}: pane ${pane.pane_id} launched + prompt injected (alive: ${aliveAfter})`);
       }
-      console.log(`  → workspace: bandit / tab: serfs — switch to herdr to watch and steer\n`);
+      console.log(`  → workspace: bandit / tabs: management (master, critic) + serfs — switch to herdr to watch and steer\n`);
     },
   },
   {
