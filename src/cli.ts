@@ -232,12 +232,16 @@ const COMMANDS: Command[] = [
         ];
         const model = await choose("Which model? (all ollama models work with every agent)", modelChoices);
         cfg.args = agentLaunch(cfg.command, model, "headless").filter((a) => a !== "-p" && a !== "--no-session" && a !== "--print");
-        // ── Visibility picker: which serfs get herdr panes (watch + steer) ──
+        // ── Visibility picker: escalation ladder — start small, open up as
+        //    needed. master only (supervision), + critic (the GAN), + crew.
         const allSerfs = listSerfRoles();
+        const crew = allSerfs.filter((r) => r !== "master" && r !== "critic");
         const visibility = await choose("Which serfs do you want to SEE while it runs?", [
           { label: "none — headless, watch via `bandit watch`", value: [] as string[] },
-          ...allSerfs.map((r) => ({ label: r, value: [r] as string[] })),
-          { label: `all — ${allSerfs.join(" + ")}`, value: allSerfs },
+          { label: "master — supervision only", value: ["master"] as string[] },
+          { label: "master + critic — the GAN, live", value: ["master", "critic"] as string[] },
+          ...(crew.length ? [{ label: `master + critic + serfs — all ${allSerfs.length}`, value: allSerfs } as { label: string; value: string[] }] : []),
+          ...allSerfs.filter((r) => !["master", "critic"].includes(r)).map((r) => ({ label: r, value: [r] as string[] })),
         ]);
         cfg.visibleSerfs = visibility;
         writeFileSync(join(banditDir(), "config.json"), JSON.stringify(cfg, null, 2));
