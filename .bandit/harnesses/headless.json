@@ -1,0 +1,10 @@
+{
+  "name": "headless",
+  "command": "opencode",
+  "args": [
+    "run"
+  ],
+  "protocol": "headless",
+  "capabilities": {},
+  "note": "spawn CLI with prompt on argv; gate on exit"
+}

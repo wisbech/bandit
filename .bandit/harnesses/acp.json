@@ -1,0 +1,16 @@
+{
+  "name": "acp",
+  "command": "npx",
+  "args": [
+    "--yes",
+    "@agentclientprotocol/claude-agent-acp"
+  ],
+  "protocol": "acp",
+  "capabilities": {
+    "streaming": true,
+    "cancel": true,
+    "sessions": true,
+    "models": true
+  },
+  "note": "official Claude Code ACP adapter (claude subscription)"
+}

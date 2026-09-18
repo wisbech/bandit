@@ -1,0 +1,11 @@
+{
+  "name": "herdr",
+  "command": "opencode",
+  "args": [],
+  "protocol": "herdr",
+  "capabilities": {
+    "streaming": false,
+    "cancel": true
+  },
+  "note": "visible herdr pane (primary human interface)"
+}

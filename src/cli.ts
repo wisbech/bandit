@@ -78,6 +78,28 @@ function listOllamaModels(): string[] {
   }
 }
 
+// ── Harness adapter profiles (.bandit/harnesses/*.json) ──
+// One declarative file per harness. The factory owns identity + state; the
+// harness owns its native session. ACP is the universal spoke: claude and
+// codex via official adapters, anything harness-remote exposes via its
+// agent-scoped routes. Bundled profiles are (re)written by init/harnesses.
+
+const BUNDLED_HARNESSES: Record<string, { command: string; args: string[]; protocol: string; capabilities: Record<string, boolean>; note: string }> = {
+  headless: { command: "opencode", args: ["run"], protocol: "headless", capabilities: {}, note: "spawn CLI with prompt on argv; gate on exit" },
+  acp: { command: "npx", args: ["--yes", "@agentclientprotocol/claude-agent-acp"], protocol: "acp", capabilities: { streaming: true, cancel: true, sessions: true, models: true }, note: "official Claude Code ACP adapter (claude subscription)" },
+  "acp-codex": { command: "npx", args: ["--yes", "@zed-industries/codex-acp"], protocol: "acp", capabilities: { streaming: true, cancel: true, sessions: true }, note: "Codex CLI via ACP adapter" },
+  herdr: { command: "opencode", args: [], protocol: "herdr", capabilities: { streaming: false, cancel: true }, note: "visible herdr pane (primary human interface)" },
+};
+
+function ensureHarnessProfiles(): void {
+  const dir = join(banditDir(), "harnesses");
+  mkdirSync(dir, { recursive: true });
+  for (const [name, h] of Object.entries(BUNDLED_HARNESSES)) {
+    const file = join(dir, `${name}.json`);
+    if (!existsSync(file)) writeFileSync(file, JSON.stringify({ name, ...h }, null, 2));
+  }
+}
+
 function fail(msg: string): never {
   console.error(msg);
   process.exit(1);
@@ -108,6 +130,7 @@ const COMMANDS: Command[] = [
         writeFileSync(join(banditDir(), "serfs", name, "state.md"), "# State\n\n");
         writeFileSync(join(banditDir(), "serfs", name, "prompt.md"), `You are ${name}. ${name === "actor" ? "Execute the task. Edit real source files.\n\nTASK: {{card.task}}\n\nACCEPTANCE:\n{{card.acceptance}}\n\nReport VERIFICATION_COMMAND, VERIFICATION_EXIT_CODE, VERIFICATION_OUTPUT." : name === "critic" ? "Evaluate adversarially. Demand evidence for every criterion." : "Coordinate the factory."}\n`);
       }
+      ensureHarnessProfiles();
       console.log("  .bandit/ created. A bandit is a folder. A card is a folder.");
     },
   },
@@ -214,6 +237,8 @@ const COMMANDS: Command[] = [
       } else {
         if (agentFlag >= 0 && args[agentFlag + 1]) cfg.command = args[agentFlag + 1];
         if (modelFlag >= 0 && args[modelFlag + 1]) cfg.args = agentLaunch(cfg.command, args[modelFlag + 1], "headless").filter((a) => a !== "-p" && a !== "--no-session" && a !== "--print");
+        const transportFlag = args.indexOf("--transport");
+        if (transportFlag >= 0 && args[transportFlag + 1]) cfg.transport = args[transportFlag + 1];
         // --visible actor,critic | --visible all | --visible none
         const visibleFlag = args.indexOf("--visible");
         if (visibleFlag >= 0) {
@@ -222,7 +247,7 @@ const COMMANDS: Command[] = [
             : raw === "none" ? []
             : raw.split(",").map((s) => s.trim()).filter((s) => s && listSerfRoles().includes(s));
         }
-        if (agentFlag >= 0 || modelFlag >= 0 || visibleFlag >= 0) {
+        if (agentFlag >= 0 || modelFlag >= 0 || visibleFlag >= 0 || transportFlag >= 0) {
           writeFileSync(join(banditDir(), "config.json"), JSON.stringify(cfg, null, 2));
         }
       }
@@ -261,14 +286,14 @@ const COMMANDS: Command[] = [
         } catch {}
       }
 
+      const { resolveTransport } = await import("./runner");
       const result = await runLoop({
         root: process.cwd(),
-        transport: { kind: cfg.transport ?? "headless", command: cfg.command ?? "opencode", args: cfg.args ?? ["run"] },
+        transport: resolveTransport({ kind: cfg.transport ?? "headless", command: cfg.command ?? "opencode", args: cfg.args ?? ["run"] }, process.cwd()),
         container: cfg.container || undefined,
         maxRetries: cfg.maxRetries ?? 3,
         once: args.includes("--once"),
       });
-      console.log(`\n  processed: ${result.processed} | done: ${result.completed} | failed: ${result.failed}\n`);
       if (!visitor) { try { unlinkSync(lockPath); } catch {} }
     },
   },
@@ -520,15 +545,49 @@ const COMMANDS: Command[] = [
       }
       const cfg = JSON.parse(readFileSync(join(banditDir(), "config.json"), "utf-8"));
       const result = await runRefinePass(process.cwd(), async (prompt) => {
-        const { runTransport } = await import("./runner");
+        const { runTransport, resolveTransport } = await import("./runner");
         const run = await runTransport(
-          { kind: cfg.transport ?? "headless", command: cfg.command ?? "opencode", args: cfg.args ?? ["run"] },
-          prompt, process.cwd(), join(banditDir(), "refiner-last-llm.md"), 120_000,
+          resolveTransport({ kind: cfg.transport ?? "headless", command: cfg.command ?? "opencode", args: cfg.args ?? ["run"] }, process.cwd()),
+          prompt, process.cwd(), join(banditDir(), "refiner-last-llm.md"), cfg.timeoutMs ?? 120_000,
         );
         return run.output;
       }, { force: args.includes("--force") });
       console.log(`  ${result.ran ? `applied ${result.applied.length}, skipped ${result.skipped.length}` : `not run: ${result.reason}`}`);
       for (const e of result.applied) console.log(`   ✓ [${e.serf}] ${e.op} ${e.target}${e.name ? ` ${e.name}` : ""} — ${e.reason}`);
+    },
+  },
+  {
+    name: "harnesses",
+    summary: "list harness adapter profiles (.bandit/harnesses/) — or add: bandit harnesses add <name> <command> [args...] [--protocol acp|headless]",
+    fn: async (args) => {
+      if (args[0] === "add") {
+        ensureHarnessProfiles();
+        const name = args[1];
+        if (!name) fail("usage: bandit harnesses add <name> <command> [args...] [--protocol acp|headless]");
+        const protoFlag = args.indexOf("--protocol");
+        const protocol = protoFlag >= 0 ? args[protoFlag + 1] ?? "acp" : "acp";
+        const rest = args.slice(2).filter((a, i) => a !== "--protocol" && args[protoFlag >= 0 ? protoFlag + 1 : -1] !== a || i === 0);
+        const command = rest[0];
+        const pargs = rest.slice(1).filter((a) => a !== "--protocol");
+        if (!command) fail("missing command — usage: bandit harnesses add <name> <command> [args...]");
+        const file = join(banditDir(), "harnesses", `${name}.json`);
+        writeFileSync(file, JSON.stringify({ name, command, args: pargs, protocol, capabilities: { streaming: protocol === "acp", cancel: protocol === "acp", sessions: protocol === "acp" } }, null, 2));
+        console.log(`  ✓ harness profile: ${file}`);
+        console.log(`  → use it: set "transport": "${name}" in .bandit/config.json (or bandit start --transport ${name})\n`);
+        return;
+      }
+      ensureHarnessProfiles();
+      const { loadHarnessProfiles } = await import("./runner");
+      const cfg = JSON.parse(readFileSync(join(banditDir(), "config.json"), "utf-8"));
+      const current = cfg.transport ?? "headless";
+      console.log(`\n  ═══ BANDIT HARNESSES ═══════════════════════`);
+      const profiles = loadHarnessProfiles(process.cwd());
+      for (const [name, p] of profiles) {
+        const marker = name === current ? " ● active" : "";
+        console.log(`  ${name.padEnd(12)} ${p.protocol.padEnd(9)} ${p.command} ${(p.args ?? []).join(" ")}${marker}`);
+      }
+      console.log(`\n  → switch: "transport": "<name>" in .bandit/config.json, or bandit start --transport <name>`);
+      console.log(`  → add:    bandit harnesses add <name> <command> [args...] [--protocol acp]\n`);
     },
   },
   {

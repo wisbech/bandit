@@ -1,0 +1,15 @@
+{
+  "name": "acp-codex",
+  "command": "npx",
+  "args": [
+    "--yes",
+    "@zed-industries/codex-acp"
+  ],
+  "protocol": "acp",
+  "capabilities": {
+    "streaming": true,
+    "cancel": true,
+    "sessions": true
+  },
+  "note": "Codex CLI via ACP adapter"
+}
