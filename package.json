@@ -12,5 +12,22 @@
   },
   "devDependencies": {
     "bun-types": "^1.4.2"
-  }
+  },
+  "description": "The agent factory \u2014 AI coding agents on a kanban board, an adversarial critic enforcing quality, verification-gated everything.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wisbech/bandit.git"
+  },
+  "keywords": [
+    "ai-agents",
+    "coding-agent",
+    "kanban",
+    "actor-critic",
+    "opencode",
+    "claude-code",
+    "acp",
+    "agent-factory",
+    "bun"
+  ]
 }
