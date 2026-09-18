@@ -51,6 +51,10 @@ function listAgents(): string[] {
 // Model is normalized to provider/id form everywhere: opencode wants
 // "ollama/x", pi wants "--provider ollama --model x" but ALSO accepts
 // "ollama/x", claude accepts a --model string directly.
+// TUI shapes differ from headless: opencode's TUI takes NO positional arg
+// (`opencode [project]` — passing "run" makes it treat `run` as a project
+// path and errors "You must provide a message or a command"); the model is
+// selected inside the TUI (Ctrl+P / /models), so TUI launches drop it.
 function agentLaunch(agent: string, model: string | null, mode: "headless" | "tui"): string[] {
   const modelPair = (fmt: (m: string) => string[]): string[] => (model ? fmt(model) : []);
   if (agent === "pi") {
@@ -61,7 +65,11 @@ function agentLaunch(agent: string, model: string | null, mode: "headless" | "tu
     if (mode === "headless") return modelPair((m) => ["--model", m.includes("/") ? m.split("/")[1] : m, "--print"]);
     return modelPair((m) => ["--model", m.includes("/") ? m.split("/")[1] : m]);
   }
-  // opencode / codex / aider: default harness shape
+  if (agent === "opencode") {
+    if (mode === "headless") return modelPair((m) => ["run", "--model", m]);
+    return []; // TUI: bare `opencode` — model chosen in-session
+  }
+  // codex / aider: default harness shape
   if (mode === "headless") return modelPair((m) => ["run", "--model", m]);
   return modelPair((m) => ["run", "--model", m]);
 }
