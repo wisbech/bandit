@@ -305,6 +305,9 @@ const COMMANDS: Command[] = [
         container: cfg.container || undefined,
         maxRetries: cfg.maxRetries ?? 3,
         once: args.includes("--once"),
+        // Evidence-Preserving Reducer (SoL-Pi): optional cheap model that
+        // compresses large gate logs into verified receipts.
+        reducer: cfg.reducer ?? undefined,
       });
       if (!visitor) { try { unlinkSync(lockPath); } catch {} }
     },

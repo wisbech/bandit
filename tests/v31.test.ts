@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 function greenOutput(): string {
-  return "Did the work.\nVERIFICATION_COMMAND: bun test\nVERIFICATION_EXIT_CODE: 0\nVERIFICATION_OUTPUT: 3 pass";
+  return "Did the work.\nVERIFICATION_COMMAND: true\nVERIFICATION_EXIT_CODE: 0\nVERIFICATION_OUTPUT: 3 pass";
 }
 
 function seedCard(id: string, extraFrontmatter = ""): string {

@@ -16,7 +16,7 @@ function refinerDir(root: string): string {
 }
 
 export interface FailureSignature {
-  kind: "retry_pattern" | "critic_plumbing" | "verification_red" | "container_rejected" | "stall" | "recurring_task";
+  kind: "retry_pattern" | "critic_plumbing" | "verification_red" | "container_rejected" | "stall" | "recurring_task" | "oracle_waste";
   count: number;
   cards: string[];
   evidence: string;
@@ -71,6 +71,18 @@ export function classifySignatures(events: { type: string; ts: string; [k: strin
   const containerRej = events.filter((e) => e.type === "verification.container_rejected");
   if (containerRej.length >= 2) {
     sigs.push({ kind: "container_rejected", count: containerRej.length, cards: containerRej.map((e) => String((e as Record<string, unknown>).card ?? "")).slice(0, 3), evidence: `${containerRej.length} verifications outside the declared container` });
+  }
+
+  // Oracle analysis (SoL-Pi appropriation): wasted-work signatures from the
+  // gate's self-verification — the loop now KNOWS when the actor's reported
+  // exit code didn't match reality, and when reduction failed to pay.
+  const selfVerifyMismatches = events.filter((e) => e.type === "gate.selfverify");
+  if (selfVerifyMismatches.length >= 2) {
+    sigs.push({ kind: "oracle_waste", count: selfVerifyMismatches.length, cards: [...new Set(selfVerifyMismatches.map((e) => String((e as Record<string, unknown>).card ?? "")))].slice(0, 3), evidence: `${selfVerifyMismatches.length} reported verification codes did not match the re-run — actor is guessing or gaming the gate` });
+  }
+  const badReceipts = events.filter((e) => e.type === "gate.reduce_failed");
+  if (badReceipts.length >= 2) {
+    sigs.push({ kind: "oracle_waste", count: badReceipts.length, cards: [], evidence: `${badReceipts.length} evidence receipts failed verification — reducer prompt or model needs attention` });
   }
 
   return sigs;

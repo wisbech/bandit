@@ -45,11 +45,11 @@ afterEach(() => {
 
 // Simulated actor output: verification green in one attempt.
 function greenOutput(): string {
-  return "Did the work.\nVERIFICATION_COMMAND: bun test\nVERIFICATION_EXIT_CODE: 0\nVERIFICATION_OUTPUT: 3 pass";
+  return "Did the work.\nVERIFICATION_COMMAND: true\nVERIFICATION_EXIT_CODE: 0\nVERIFICATION_OUTPUT: 3 pass";
 }
 
 function redOutput(): string {
-  return "Tried something.\nVERIFICATION_COMMAND: bun test\nVERIFICATION_EXIT_CODE: 1\nVERIFICATION_OUTPUT: FAIL exports.test.ts";
+  return "Tried something.\nVERIFICATION_COMMAND: false\nVERIFICATION_EXIT_CODE: 1\nVERIFICATION_OUTPUT: FAIL exports.test.ts";
 }
 
 describe("V3-0: card-as-folder", () => {
@@ -83,7 +83,7 @@ describe("V3-0: runner composition", () => {
   test("gate parses green and red verification", () => {
     const green = parseGate(greenOutput());
     expect(green.green).toBe(true);
-    expect(green.command).toBe("bun test");
+    expect(green.command).toBe("true");
     const red = parseGate(redOutput());
     expect(red.green).toBe(false);
     expect(red.fingerprint).toBeDefined();

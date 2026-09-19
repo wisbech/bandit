@@ -550,11 +550,143 @@ export interface RunOptions {
   container?: string;
   vars: Record<string, unknown>;
   timeoutMs?: number;
+  reducer?: { command: string; args: string[] }; // cheap model for log receipts (Evidence-Preserving Reducer)
+}
+
+// ── SELF-VERIFICATION GATE (SoL-Pi appropriation) ──
+// The actor's reported VERIFICATION_EXIT_CODE is a claim, not a fact. The
+// harness re-runs the reported command itself and uses the ACTUAL exit code.
+// Capability metrics stay outside the agent's control — no gaming the gate.
+
+export interface SelfVerifyResult {
+  attempted: boolean;
+  command?: string;
+  reportedExitCode?: number;
+  actualExitCode?: number;
+  timedOut: boolean;
+  outputBytes: number;
+  outputPath?: string;
+}
+
+export async function selfVerifyGateAsync(gate: GateResult, cardDir: string, timeoutMs = 300_000): Promise<SelfVerifyResult> {
+  const result: SelfVerifyResult = { attempted: false, command: gate.command, reportedExitCode: gate.exitCode, timedOut: false, outputBytes: 0 };
+  if (!gate.command) return result;
+  result.attempted = true;
+  const logPath = join(cardDir, "verification-output.log");
+  const wrapped = `{ ${gate.command} ; } 2>&1 | tee "${logPath}" ; exit \${PIPESTATUS[0]}`;
+  const proc = Bun.spawn(["bash", "-c", wrapped], { cwd: cardDir, stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => { try { proc.kill(); } catch {} result.timedOut = true; }, timeoutMs);
+  const code = await proc.exited;
+  clearTimeout(timer);
+  result.actualExitCode = result.timedOut ? 124 : code;
+  result.outputPath = logPath;
+  try {
+    const size = Bun.spawnSync(["stat", "-f", "%z", logPath]).stdout.toString().trim();
+    result.outputBytes = parseInt(size, 10) || 0;
+  } catch {}
+  return result;
+}
+
+// ── EVIDENCE-PRESERVING REDUCER (SoL-Pi appropriation) ──
+// A cheap model compresses a large log into a compact receipt; a deterministic
+// verifier checks the receipt (schema, source hash, exit status, exact quotes,
+// size). On any failure → fall back to the original. The main agent keeps
+// diagnosis; the reducer only extracts evidence.
+
+export interface EvidenceReceipt {
+  receipt: string | null;
+  sourceBytes: number;
+  receiptBytes: number;
+  verified: boolean;
+  reason?: string;
+}
+
+export function verifyReceipt(receipt: string, source: string, exitCode?: number): { ok: boolean; reason?: string } {
+  // schema: RECEIPT header, SOURCE-HASH, EXIT, QUOTES with exact matches
+  if (!/^RECEIPT:/m.test(receipt)) return { ok: false, reason: "missing RECEIPT header" };
+  const hashLine = receipt.match(/SOURCE-HASH:\s*([a-f0-9]{8})/i);
+  if (!hashLine) return { ok: false, reason: "missing SOURCE-HASH" };
+  // djb2 over source, matching bandit's fingerprint() normalization-free form
+  let h = 5381;
+  for (let i = 0; i < source.length; i++) h = ((h << 5) + h + source.charCodeAt(i)) >>> 0;
+  if (hashLine[1] !== h.toString(16).padStart(8, "0").slice(0, 8)) return { ok: false, reason: "source hash mismatch" };
+  if (!/EXIT:\s*\d+/i.test(receipt)) return { ok: false, reason: "missing exit status" };
+  const quotes = [...receipt.matchAll(/^QUOTE:\s*(.+)$/gmi)].map((m) => m[1].trim());
+  if (quotes.length === 0) return { ok: false, reason: "no exact quotes" };
+  for (const q of quotes.slice(0, 5)) {
+    if (q.length < 8) return { ok: false, reason: "quote too short to verify" };
+    if (!source.includes(q)) return { ok: false, reason: `quote not found in source: ${q.slice(0, 40)}` };
+  }
+  if (receipt.length >= source.length) return { ok: false, reason: "receipt not smaller than source" };
+  return { ok: true };
+}
+
+export async function reduceEvidence(
+  output: string,
+  reducer: { command: string; args: string[] },
+  exitCode?: number,
+): Promise<EvidenceReceipt> {
+  const sourceBytes = output.length;
+  if (sourceBytes < 4096) return { receipt: null, sourceBytes, receiptBytes: 0, verified: false, reason: "below 4KiB threshold" };
+  if (/password|secret|api[_-]?key|token/i.test(output.slice(0, 2000))) {
+    return { receipt: null, sourceBytes, receiptBytes: 0, verified: false, reason: "credential-suspect content, no reduction" };
+  }
+  let h = 5381;
+  for (let i = 0; i < output.length; i++) h = ((h << 5) + h + output.charCodeAt(i)) >>> 0;
+  const hash = h.toString(16).padStart(8, "0").slice(0, 8);
+  const prompt = [
+    "Compress this command log into an evidence receipt. Keep the information needed to diagnose failures: exit status, error lines, test results.",
+    "Format EXACTLY:",
+    "RECEIPT: <one-line summary>",
+    "SOURCE-HASH: " + hash,
+    "EXIT: " + (exitCode ?? "unknown"),
+    "QUOTE: <exact verbatim line copied from the log>  (3-5 quotes, each a full line from the log, unchanged)",
+    "NOTES: <short diagnosis>",
+    "",
+    "LOG:",
+    output.slice(0, 100_000),
+  ].join("\n");
+  try {
+    const proc = Bun.spawn([reducer.command, ...reducer.args, prompt], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const text = await new Response(proc.stdout).text();
+    const receipt = text.trim();
+    const verdict = verifyReceipt(receipt, output);
+    if (!verdict.ok) return { receipt: null, sourceBytes, receiptBytes: receipt.length, verified: false, reason: verdict.reason };
+    return { receipt, sourceBytes, receiptBytes: receipt.length, verified: true };
+  } catch (e) {
+    return { receipt: null, sourceBytes, receiptBytes: 0, verified: false, reason: String(e) };
+  }
+}
+
+// ── OBSERVATIONPACK (SoL-Pi appropriation) ──
+// Large inputs to the next stage (the critic) become a stable handle (file on
+// disk, exact and retrievable) + a bounded excerpt. Nothing is lost — the
+// critic can read the file; we just stop paying to inline it.
+
+export function packObservation(output: string, cardDir: string, label: string, thresholdBytes = 10_240): { text: string; archived: boolean; path?: string } {
+  if (output.length <= thresholdBytes) return { text: output, archived: false };
+  const packDir = join(cardDir, "observations");
+  mkdirSync(packDir, { recursive: true });
+  const path = join(packDir, `${label}.log`);
+  writeFileSync(path, output);
+  const head = output.split("\n").slice(0, 12).join("\n");
+  const tail = output.split("\n").slice(-12).join("\n");
+  const text = [
+    `[OBSERVATION PACKED — ${output.length} bytes archived at ${path}]`,
+    "--- head ---",
+    head,
+    "--- tail ---",
+    tail,
+    "[Use `sed -n 'X,Yp' " + path + "` to read exact ranges on demand.]",
+  ].join("\n");
+  return { text, archived: true, path };
 }
 
 // One complete execution: render prompt from bandit folder, run transport,
 // evaluate the gate, persist output + gate fingerprint into the card folder.
-export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult; gate: GateResult; unchangedGate: boolean }> {
+// Then: self-verify the gate (re-run the reported command for the ACTUAL exit
+// code) and reduce oversized logs into verified evidence receipts.
+export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult; gate: GateResult; unchangedGate: boolean; selfVerify?: SelfVerifyResult; evidence?: EvidenceReceipt }> {
   const serf = readSerfFolder(opts.serfDir);
   const card = parseCard(opts.cardDir);
   const prompt = renderPrompt(serf.prompt, { ...opts.vars, serf: { name: serf.name }, card: cardVars(card) });
@@ -571,6 +703,23 @@ export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult;
     gate.inContainer = gate.command.includes(`docker exec ${opts.container}`);
   }
 
+  // self-verification stage: trust nothing, re-run the reported command
+  let selfVerify: SelfVerifyResult | undefined;
+  if (gate.command) {
+    selfVerify = await selfVerifyGateAsync(gate, opts.cardDir);
+    if (selfVerify.actualExitCode !== undefined) {
+      gate.exitCode = selfVerify.actualExitCode;
+      gate.green = selfVerify.actualExitCode === 0;
+      gate.output = selfVerify.timedOut ? (gate.output ?? "") + "\n[self-verify: TIMED OUT]" : gate.output;
+    }
+  }
+
+  // evidence-preserving reduction: big gate output becomes a verified receipt
+  let evidence: EvidenceReceipt | undefined;
+  if (opts.reducer && gate.command && run.output.length >= 4096) {
+    evidence = await reduceEvidence(run.output, opts.reducer, gate.exitCode);
+  }
+
   // gate fingerprint stage
   let unchangedGate = false;
   if (!gate.green && gate.fingerprint) {
@@ -578,5 +727,5 @@ export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult;
     saveGateFingerprint(opts.cardDir, gate.fingerprint);
   }
 
-  return { run, gate, unchangedGate };
+  return { run, gate, unchangedGate, selfVerify, evidence };
 }

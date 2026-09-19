@@ -11,6 +11,7 @@ export interface LoopConfig {
   container?: string;
   maxRetries?: number;
   once?: boolean;
+  reducer?: { command: string; args: string[] }; // Evidence-Preserving Reducer (cheap model)
 }
 
 const COLUMNS = ["backlog", "in-progress", "review", "done"] as const;
@@ -114,11 +115,16 @@ export function parseCriticVerdict(text: string): CriticVerdict {
   };
 }
 
+// ObservationPack (SoL-Pi appropriation): big actor outputs become a stable
+// on-disk handle + bounded excerpt — exact content stays retrievable on
+// demand, we just stop inlining 50KB into the critic prompt.
 async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string, maxRepairTurns = 2): Promise<{ verdict: CriticVerdict; verdictPath: string | null }> {
   const criticDir = join(dir("serfs"), "critic");
+  const { packObservation } = await import("./runner");
+  const packed = packObservation(actorOutput, card.dir, "actor-output");
   const prompt = readFileSync(join(criticDir, "prompt.md"), "utf-8")
     .replace(/\{\{card\.task\}\}/g, card.body.slice(0, 2000))
-    .replace(/\{\{actor\.output\}\}/g, actorOutput.slice(0, 3000));
+    .replace(/\{\{actor\.output\}\}/g, packed.text.slice(0, packed.archived ? 6000 : 3000));
 
   let text = "";
   let verdict: CriticVerdict | null = null;
@@ -129,7 +135,7 @@ async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string,
       serfDir: criticDir,
       cardDir: card.dir,
       transport: cfg.transport,
-      vars: { "actor.output": actorOutput },
+      vars: { "actor.output": packed.text },
     });
     text = run.run.output;
     verdict = parseCriticVerdict(text);
@@ -260,29 +266,42 @@ async function convergeCard(
   let lastFailedCapability: string | null = null;
   let consecutiveSameFailure = 0;
   let lastOutput = "";
+  // Online Context Compact (SoL-Pi): bounded per-round history for digests.
+  let roundHistory: { round: number; green: boolean; verdict: string; confidence: number; reasoning: string; command?: string }[] = [];
 
   for (let round = 1; round <= maxRetries; round++) {
     emit("round.started", { card: card.id, round, lever: leverId });
     const currentCardDir = findCardDir(config.root, card.id) ?? card.dir;
-    const feedback = round > 1
+    let feedback = round > 1
       ? "CONVERGENCE ROUND " + round + ". Previous rounds did not converge. Address the critic's issues with the lever in mind."
       : "";
     const specialistDir = consecutiveSameFailure >= 2 ? lastFailedCapability : null;
     void specialistDir;
-    const { run, gate } = await runSerfOnCard({
+    const { run, gate, selfVerify, evidence } = await runSerfOnCard({
       serfDir: actorDir,
       cardDir: currentCardDir,
       transport: config.transport,
       container: config.container,
+      reducer: config.reducer,
       vars: {
         feedback,
         lever: leverId ? "pull the lever — your work is measured by its instrument" : "",
       },
     });
+    if (selfVerify?.attempted && selfVerify.actualExitCode !== selfVerify.reportedExitCode) {
+      emit("gate.selfverify", { card: card.id, round, reported: selfVerify.reportedExitCode, actual: selfVerify.actualExitCode });
+    }
+    if (evidence) {
+      if (evidence.verified) {
+        emit("gate.reduced", { card: card.id, round, from: evidence.sourceBytes, to: evidence.receiptBytes });
+      } else if (evidence.reason && evidence.sourceBytes >= 4096) {
+        emit("gate.reduce_failed", { card: card.id, round, reason: evidence.reason?.slice(0, 60) });
+      }
+    }
     lastOutput = run.output;
     recordSpend(parseCard(currentCardDir), run.tokensUsed);
     const green = gate.green;
-    emit(green ? "verification.green" : "verification.red", { card: card.id, round, command: gate.command });
+    emit(green ? "verification.green" : "verification.red", { card: card.id, round, command: gate.command, selfVerified: selfVerify?.attempted ?? false });
 
     // Critic evaluates (on green output) or TRIAGES (on red — cheap redirect).
     const { verdict, verdictPath } = await runCritic(config, parseCard(currentCardDir), lastOutput);
@@ -311,6 +330,21 @@ async function convergeCard(
     } else {
       consecutiveSameFailure = 1;
       lastFailedCapability = missingCapability;
+    }
+
+    // Online Context Compact (SoL-Pi appropriation): later rounds get a
+    // digest of prior rounds — verdicts, gate history, spend — not the full
+    // transcript. Compaction happens exactly at a round boundary.
+    if (round >= 2) {
+      const digest = [
+        `## Prior rounds (digest — details in card folder)`,
+        ...roundHistory.map((h) => `- round ${h.round}: ${h.green ? "green" : "red"} gate (${h.command ?? "no cmd"}) · critic ${h.verdict}${h.confidence ? ` (${h.confidence})` : ""} — ${h.reasoning.slice(0, 90)}`),
+      ].join("\n");
+      roundHistory.push({ round, green, verdict: verdict.verdict, confidence: verdict.confidence, reasoning: verdict.reasoning, command: gate.command });
+      roundHistory = roundHistory.slice(-4); // bounded — compaction, not accumulation
+      feedback = (feedback ? feedback + "\n\n" : "") + digest;
+    } else {
+      roundHistory.push({ round, green, verdict: verdict.verdict, confidence: verdict.confidence, reasoning: verdict.reasoning, command: gate.command });
     }
 
     // Spawn trigger: same missing capability twice → spawn a specialist child

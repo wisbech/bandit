@@ -202,6 +202,7 @@ Recursion is structural: a factory spawns child factories the way serfs spawn ch
 | [Architecture](docs/architecture.md) | the loop, folders, cards, events, pipelines, the critic, confidence, budgets, recursion |
 | [Harnesses](docs/harnesses.md) | adapter profiles, the four protocols, ACP lifecycle, gateway auth (any LLM backend), model routing |
 | [CLI reference](docs/cli.md) | every command with flags and examples |
+| [Appropriations](docs/appropriations.md) | the stolen — cited — research behind bandit: SoL-Pi's four mechanisms, Thompson sampling, event sourcing, and the full lineage |
 
 ## Tests
 
