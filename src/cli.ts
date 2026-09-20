@@ -52,9 +52,8 @@ function listAgents(): string[] {
 // "ollama/x", pi wants "--provider ollama --model x" but ALSO accepts
 // "ollama/x", claude accepts a --model string directly.
 // TUI shapes differ from headless: opencode's TUI takes NO positional arg
-// (`opencode [project]` — passing "run" makes it treat `run` as a project
-// path and errors "You must provide a message or a command"); the model is
-// selected inside the TUI (Ctrl+P / /models), so TUI launches drop it.
+// (`opencode [project]` — "run" is a project path) but DOES take --model
+// (serf v2's proven pane shape); claude takes --model; pi takes provider/model.
 function agentLaunch(agent: string, model: string | null, mode: "headless" | "tui"): string[] {
   const modelPair = (fmt: (m: string) => string[]): string[] => (model ? fmt(model) : []);
   if (agent === "pi") {
@@ -67,7 +66,7 @@ function agentLaunch(agent: string, model: string | null, mode: "headless" | "tu
   }
   if (agent === "opencode") {
     if (mode === "headless") return modelPair((m) => ["run", "--model", m]);
-    return []; // TUI: bare `opencode` — model chosen in-session
+    return modelPair((m) => ["--model", m]); // serf v2's proven pane shape
   }
   // codex / aider: default harness shape
   if (mode === "headless") return modelPair((m) => ["run", "--model", m]);
@@ -485,18 +484,11 @@ const COMMANDS: Command[] = [
         const scratch = join(process.cwd(), ".bandit", "tmp");
         mkdirSync(scratch, { recursive: true });
         const venvPrefix = cfg.venvPrefix ?? "uv venv if missing; never install globally; use project venv/bin + local package managers (uv/bun)";
-        // Guard against two boot killers: (1) the fresh-split pane race
-        // (TUI draws before the pty has dimensions) and (2) opencode's
-        // capability-handshake crash in herdr panes (sst/opencode#41483 —
-        // herdr answers everything except OSC 10/11 → deterministic
-        // EXC_BREAKPOINT in bufferDrawTextBufferView). Fix (1) with a stty
-        // size poll; fix (2) by launching through the handshake-answer pty
-        // wrapper (bin/answer-handshake.py) for opencode.
-        const sizeGuard = `while true; do C=$(stty size 2>/dev/null | cut -d" " -f2); L=$(stty size 2>/dev/null | cut -d" " -f1); [ -n "$C" ] && [ "$C" -gt 2 ] && break; sleep 0.3; done; export LINES=$L COLUMNS=$C`;
-        const wrapper = tuiCommand === "opencode"
-          ? "python3 " + JSON.stringify(join(import.meta.dir, "answer-handshake.py"))
-          : "";
-        const launch = `cd ${JSON.stringify(process.cwd())} && mkdir -p .bandit/tmp && export TMPDIR=${JSON.stringify(scratch)} && ${sizeGuard} && ${wrapper ? wrapper + " " : ""}${tuiCommand} ${argStr}`.trim();
+        // serf v2's proven pane launch: cd + TMPDIR redirect + command + args.
+        // No wrapper, no size guard — v2 ran opencode in herdr panes for
+        // months with exactly this shape. When a crash appears, match v2
+        // before inventing mechanism (the handshake wrapper was reverted).
+        const launch = `cd ${JSON.stringify(process.cwd())} && mkdir -p .bandit/tmp && export TMPDIR=${JSON.stringify(scratch)} && ${tuiCommand} ${argStr}`.trim();
         // Boot with one retry: a flaky boot (TUI crash on fresh pane) gets a
         // second chance before we give up — the pane shell survives the crash.
         let alive = false;
