@@ -485,12 +485,18 @@ const COMMANDS: Command[] = [
         const scratch = join(process.cwd(), ".bandit", "tmp");
         mkdirSync(scratch, { recursive: true });
         const venvPrefix = cfg.venvPrefix ?? "uv venv if missing; never install globally; use project venv/bin + local package managers (uv/bun)";
-        // Guard against the fresh-split pane race: opencode/OpenTUI crashes
-        // (EXC_BREAKPOINT in bufferDrawTextBufferView) when the TUI draws
-        // before the pty has real dimensions. Wait for a nonzero size via a
-        // pty-size poll before exec'ing the agent, then set LINES/COLUMNS.
+        // Guard against two boot killers: (1) the fresh-split pane race
+        // (TUI draws before the pty has dimensions) and (2) opencode's
+        // capability-handshake crash in herdr panes (sst/opencode#41483 —
+        // herdr answers everything except OSC 10/11 → deterministic
+        // EXC_BREAKPOINT in bufferDrawTextBufferView). Fix (1) with a stty
+        // size poll; fix (2) by launching through the handshake-answer pty
+        // wrapper (bin/answer-handshake.py) for opencode.
         const sizeGuard = `while true; do C=$(stty size 2>/dev/null | cut -d" " -f2); L=$(stty size 2>/dev/null | cut -d" " -f1); [ -n "$C" ] && [ "$C" -gt 2 ] && break; sleep 0.3; done; export LINES=$L COLUMNS=$C`;
-        const launch = `cd ${JSON.stringify(process.cwd())} && mkdir -p .bandit/tmp && export TMPDIR=${JSON.stringify(scratch)} && ${sizeGuard} && ${tuiCommand} ${argStr}`.trim();
+        const wrapper = tuiCommand === "opencode"
+          ? "python3 " + JSON.stringify(join(import.meta.dir, "answer-handshake.py"))
+          : "";
+        const launch = `cd ${JSON.stringify(process.cwd())} && mkdir -p .bandit/tmp && export TMPDIR=${JSON.stringify(scratch)} && ${sizeGuard} && ${wrapper ? wrapper + " " : ""}${tuiCommand} ${argStr}`.trim();
         // Boot with one retry: a flaky boot (TUI crash on fresh pane) gets a
         // second chance before we give up — the pane shell survives the crash.
         let alive = false;
