@@ -381,9 +381,9 @@ const COMMANDS: Command[] = [
         const argPairs = agentLaunch(chatAgent, model, "tui");
         const argStr = argPairs.map((a) => JSON.stringify(a)).join(" ");
         await herdr.sendCommand(pane.pane_id, `cd ${JSON.stringify(process.cwd())} && ${chatAgent} ${argStr}`.trim());
-        await new Promise((r) => setTimeout(r, 10_000));
-        if (!(await herdr.isAgentAlive(pane.pane_id).catch(() => false))) {
-          console.log(`  ⚠ ${chatAgent} did not boot in chat pane ${pane.pane_id}`);
+        const chatBoot = await herdr.waitPaneAgent(pane.pane_id, 45_000);
+        if (chatBoot !== "detected") {
+          console.log(`  ⚠ ${chatAgent} did not boot in chat pane ${pane.pane_id} (${chatBoot})`);
           return;
         }
         await herdr.sendCommand(pane.pane_id, seedPrompt);
@@ -489,23 +489,34 @@ const COMMANDS: Command[] = [
         // months with exactly this shape. When a crash appears, match v2
         // before inventing mechanism (the handshake wrapper was reverted).
         const launch = `cd ${JSON.stringify(process.cwd())} && mkdir -p .bandit/tmp && export TMPDIR=${JSON.stringify(scratch)} && ${tuiCommand} ${argStr}`.trim();
-        // Boot with one retry: a flaky boot (TUI crash on fresh pane) gets a
-        // second chance before we give up — the pane shell survives the crash.
-        let alive = false;
+        // Event-driven boot: subscribe BEFORE launching, then wait for
+        // pane.agent_detected / pane.exited from the herdr event stream.
+        // No sleeps, no alive-polls — the push replaces the poll.
+        let booted: "detected" | "exited" | "timeout" = "timeout";
         for (let attempt = 1; attempt <= 2; attempt++) {
+          const waitP = herdr.waitPaneAgent(pane.pane_id, 45_000);
           await herdr.sendCommand(pane.pane_id, launch);
-          // v2 waited 10s for the TUI to boot before typing anything.
-          await new Promise((r) => setTimeout(r, 10_000));
-          alive = await herdr.isAgentAlive(pane.pane_id).catch(() => false);
-          if (alive) break;
-          if (attempt === 1) console.log(`  · ${role}: boot attempt 1 failed in ${pane.pane_id} — retrying (flaky TUI boot)`);
+          booted = await waitP;
+          if (booted === "detected") break;
+          if (booted === "timeout") {
+            // event stream may have missed a fast boot — one liveness check
+            const alive = await herdr.isAgentAlive(pane.pane_id).catch(() => false);
+            if (alive) { booted = "detected"; break; }
+          }
+          if (attempt === 1) console.log(`  · ${role}: boot attempt 1 failed in ${pane.pane_id} (${booted}) — retrying`);
         }
-        if (!alive) {
+        if (booted !== "detected") {
           console.log(`  ⚠ ${role}: agent did not boot in pane ${pane.pane_id} — skipping injection (check pane in herdr)`);
           continue;
         }
+        // Inject after boot; confirm the TUI took the prompt with a short
+        // event wait — a status transition (idle→working) means it accepted.
         await herdr.sendCommand(pane.pane_id, `Read ${promptFile} and adopt that role fully. You are the ${role} bandit of this factory. ENVIRONMENT DISCIPLINE: every file you create — scripts, probes, downloads, scratch, data — goes under the project directory (cwd or .bandit/tmp). NEVER write to /tmp or anywhere outside the project. Use the project's virtual environment (uv/bun); never install globally. ${role === "critic" ? "Wait for the harness to show you work to evaluate." : "Wait for the harness to hand you cards."}`);
-        const aliveAfter = await herdr.isAgentAlive(pane.pane_id).catch(() => false);
+        const afterEvent = await Promise.race([
+          herdr.nextPaneEvent(pane.pane_id, 4_000),
+          new Promise((r) => setTimeout(() => r(null), 4_000)),
+        ]) as { type: string; agent_status?: string } | null;
+        const aliveAfter = afterEvent?.type === "pane.exited" ? false : await herdr.isAgentAlive(pane.pane_id).catch(() => false);
         // role->pane registry (herdr's pane.list doesn't return labels)
         const regPath = join(banditDir(), "pane-roles.json");
         const reg = existsSync(regPath) ? JSON.parse(readFileSync(regPath, "utf-8")) : {};

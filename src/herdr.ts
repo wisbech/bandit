@@ -127,3 +127,109 @@ export async function isAgentAlive(paneId: string): Promise<boolean> {
     return false;
   }
 }
+
+// ── PANE EVENTS (push, not poll) ──
+// herdr pushes pane lifecycle events over the same socket:
+//   pane.agent_detected  — an agent TUI booted in the pane
+//   pane.agent_status_changed — working/idle transitions (turn done)
+//   pane.exited          — the pane's process died
+// The 10s boot sleeps and alive-polls in the panes command are replaced by
+// this stream. fs.watch wakes the loop; events resolve the panes.
+
+export interface PaneEvent {
+  type: string;
+  pane_id?: string;
+  agent?: string;
+  agent_status?: string;
+  [k: string]: unknown;
+}
+
+const VALID_PANE_EVENT_TYPES = ["pane.agent_detected", "pane.agent_status_changed", "pane.exited"] as const;
+
+// One shared subscription per process: subscribe once, fan out to listeners.
+interface PaneEventBus {
+  listeners: ((e: PaneEvent) => void)[];
+  socket: import("node:net").Socket | null;
+  buffer: string;
+}
+
+const bus: PaneEventBus = { listeners: [], socket: null, buffer: "" };
+
+const VALID_TYPES = new Set<string>(VALID_PANE_EVENT_TYPES);
+const watchedPanes = new Set<string>();
+
+function busSend(msg: Record<string, unknown>): void {
+  if (bus.socket && bus.socket.writable) bus.socket.write(JSON.stringify(msg) + "\n");
+}
+
+function ensureBus(): import("node:net").Socket {
+  if (bus.socket) return bus.socket;
+  const socket = connect(getSocketPath());
+  bus.socket = socket;
+  socket.on("connect", () => {
+    // (re)subscribe on connect with the union of watched panes
+    const panes = [...watchedPanes];
+    if (panes.length === 0) return;
+    busSend({
+      id: `bandit-bus-${++requestId}`,
+      method: "events.subscribe",
+      params: { subscriptions: panes.flatMap((pane_id) => [...VALID_TYPES].map((type) => ({ type, pane_id }))) },
+    });
+  });
+  socket.on("data", (chunk) => {
+    bus.buffer += chunk.toString();
+    let nl: number;
+    while ((nl = bus.buffer.indexOf("\n")) >= 0) {
+      const line = bus.buffer.slice(0, nl).trim();
+      bus.buffer = bus.buffer.slice(nl + 1);
+      if (!line) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.method === "event" && msg.params) {
+          for (const l of [...bus.listeners]) l(msg.params as PaneEvent);
+        }
+      } catch {}
+    }
+  });
+  socket.on("error", () => { bus.socket = null; });
+  socket.on("close", () => { bus.socket = null; });
+  return socket;
+}
+
+function busSubscribe(paneId: string): void {
+  watchedPanes.add(paneId);
+  ensureBus();
+  busSend({
+    id: `bandit-sub-${++requestId}`,
+    method: "events.subscribe",
+    params: { subscriptions: [...VALID_TYPES].map((type) => ({ type, pane_id: paneId })) },
+  });
+}
+
+// Resolve on the FIRST matching event for a pane. No polling.
+export function nextPaneEvent(paneId: string, timeoutMs = 30_000): Promise<PaneEvent | null> {
+  busSubscribe(paneId);
+  return new Promise((resolve) => {
+    const listener = (e: PaneEvent) => {
+      if (e.pane_id !== paneId) return;
+      bus.listeners.splice(bus.listeners.indexOf(listener), 1);
+      clearTimeout(timer);
+      resolve(e);
+    };
+    const timer = setTimeout(() => {
+      const i = bus.listeners.indexOf(listener);
+      if (i >= 0) bus.listeners.splice(i, 1);
+      resolve(null);
+    }, timeoutMs);
+    bus.listeners.push(listener);
+  });
+}
+
+// Wait (event-driven) for an agent to boot in the pane — or report death.
+export async function waitPaneAgent(paneId: string, timeoutMs = 30_000): Promise<"detected" | "exited" | "timeout"> {
+  const e = await nextPaneEvent(paneId, timeoutMs);
+  if (!e) return "timeout";
+  if (e.type === "pane.agent_detected") return "detected";
+  if (e.type === "pane.exited") return "exited";
+  return "timeout";
+}
