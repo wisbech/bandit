@@ -91,6 +91,11 @@ The default headless and pane harness in bandit, and the transport we've hammere
 ### Ollama — the local backend
 **[ollama](https://github.com/ollama/ollama)** — every model in its catalog works with every bandit harness, and its Anthropic-compatible endpoint is the verified gateway behind the ACP self-hosting path. Local-first factories run on this.
 
+### Beacon — typed routing questions (planned)
+**[Asymptote-Labs/agent-beacon](https://github.com/Asymptote-Labs/agent-beacon)** · [cross-harness memory docs](https://docs.beacon.sh/concepts/cross-harness-memory.md) · [detection engine](https://docs.beacon.sh/detections/engine.md)
+
+Beacon's use of TypeSafe Jev — bounded, redacted projections answered with typed probabilities, review-gated, provenance-stored — is the pattern behind the planned routing layer ([draft plan](plans/beacon-routing-plan.md)): evoke the right agent / folder / child factory by typed question, subtract-only, fail-closed. We appropriate the *question discipline*, not the capture layer — bandit's event log already is the trace.
+
 ---
 
 ## The rule we're stealing toward
