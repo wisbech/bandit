@@ -304,6 +304,7 @@ const COMMANDS: Command[] = [
         container: cfg.container || undefined,
         maxRetries: cfg.maxRetries ?? 3,
         once: args.includes("--once"),
+        readOnly: visitor, // visitors watch; the lock holder processes cards
         // Evidence-Preserving Reducer (SoL-Pi): optional cheap model that
         // compresses large gate logs into verified receipts.
         reducer: cfg.reducer ?? undefined,

@@ -17,6 +17,7 @@ export interface LoopConfig {
   container?: string;
   maxRetries?: number;
   once?: boolean;
+  readOnly?: boolean;         // visitor: watch + heartbeat, never process cards
   reducer?: { command: string; args: string[] }; // Evidence-Preserving Reducer (cheap model)
 }
 
@@ -488,10 +489,14 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     }, 60_000);
     let waking = false;
     const wake = async () => {
+      if (config.readOnly) return; // visitors observe; the lock holder processes
       if (cardsIn("backlog").length === 0 && cardsIn("in-progress").length === 0) return;
       try {
         await runLoop({ ...config, once: true });
-      } catch {}
+      } catch (e) {
+        // a swallowed wake error looks exactly like "not working" — surface it
+        console.log(`  ⚠ wake failed: ${String(e).slice(0, 120)}`);
+      }
     };
     let debounce: ReturnType<typeof setTimeout> | null = null;
     const onBoardEvent = () => {
