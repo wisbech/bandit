@@ -449,16 +449,29 @@ const COMMANDS: Command[] = [
       }
       // Two tabs: management (master, critic) and workers (everything else).
       // Keeps supervision separated from the crew — and keeps panes bigger.
+      // Tabs are REUSED when they already exist in the workspace: re-running
+      // `bandit panes` must not spawn duplicate panes (the every-invocation
+      // spawn bug, 2026-09-24 — orphan critic panes accumulated). herdr
+      // labels numeric tabs as "1","2",… so match by tab_id presence per
+      // group: first existing tab without a role pane becomes the reuse host.
       const management = ["master", "critic"];
-      const tabFor = (role: string): Promise<{ tab_id: string }> =>
-        management.includes(role)
-          ? herdr.createTab(ws.workspace_id, "management", process.cwd())
-          : herdr.createTab(ws.workspace_id, "serfs", process.cwd());
+      const existingTabs = await herdr.listTabs(ws.workspace_id).catch(() => []);
+      const livePanes = await herdr.listPanes(ws.workspace_id).catch(() => []);
       const tabCache = new Map<string, { tab_id: string }>();
       const tabIdFor = async (role: string): Promise<string> => {
         const key = management.includes(role) ? "management" : "serfs";
         if (!tabCache.has(key)) {
-          const t = await tabFor(role);
+          // Reuse the existing tab when the role's registered pane already
+          // lives in it (registry check below handles dead panes).
+          const regPath = join(banditDir(), "pane-roles.json");
+          const reg = existsSync(regPath) ? JSON.parse(readFileSync(regPath, "utf-8")) : {};
+          const registered = reg[key === "management" ? "master" : "actor"] as string | undefined;
+          const regPane = registered ? livePanes.find((p) => p.pane_id === registered) : undefined;
+          if (registered && regPane?.tab_id) {
+            tabCache.set(key, { tab_id: regPane.tab_id });
+            return regPane.tab_id;
+          }
+          const t = await herdr.createTab(ws.workspace_id, key, process.cwd());
           tabCache.set(key, t);
         }
         return tabCache.get(key)!.tab_id;

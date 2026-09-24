@@ -71,6 +71,18 @@ export async function listPanes(workspaceId?: string): Promise<PaneInfo[]> {
   return result?.panes ?? result?.data ?? [];
 }
 
+export interface TabInfo {
+  tab_id: string;
+  label?: string;
+  workspace_id?: string;
+}
+
+export async function listTabs(workspaceId: string): Promise<TabInfo[]> {
+  const result = await send("tab.list", { workspace_id: workspaceId });
+  const tabs = result?.tabs ?? result?.data ?? [];
+  return Array.isArray(tabs) ? tabs : [];
+}
+
 export async function listWorkspaces(): Promise<{ workspace_id: string; label: string; cwd?: string }[]> {
   const result = await send("workspace.list");
   return result?.workspaces ?? result?.data ?? [];
