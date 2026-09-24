@@ -46,6 +46,37 @@ Cards to file:
 
 **Phase exit test:** stitched walk-forward OOS meets *all four* goal clauses. Not before.
 
+### Phase A2 — Premium-selling track (Sosnoff strategies, demonstration by randomized replay)
+
+The Sosnoff video ([11 "Boring" strategies](https://www.youtube.com/watch?v=Z__VENA80Bo)) defines the second track: IV structurally overstates RV → premium sellers have a built-in edge; the edge is discipline, sizing, and non-correlated positions, not the strategy itself. The eleven: short puts, jade lizard, covered calls, short put spreads, put ratio spreads, short call spreads, broken wing butterfly, unbalanced iron condor, iron condor, **short strangles** (with the 70% reveal: strangles + short puts = >70% of profits), price reversion/pairs.
+
+**Data reality (verified on this machine):** yfinance serves *live* option chains (strikes, bid/ask, IV, open interest) but **no historical option prices** — and premium-selling backtests die without historical IV/chain data. So the demonstration path is different from equity backtests:
+
+**A2.1 — Sampled day-by-day simulation (the verification harness the user specified):**
+- Sample 10 random anchor dates (seeded, logged) across the history of each underlying
+- From each anchor, walk **20 trading days forward**, day by day, on *current-as-of-that-day* information only (no look-ahead — the existing no-look-ahead verify suite enforces this)
+- For equity-side legs (covered calls on held stock, price reversion/pairs), daily prices from yfinance are exact — full fidelity backtest is possible
+- For short-put/strangle legs, use **synthetic option pricing**: Black-Scholes with historical realized vol + a documented IV-premium assumption (IV−RV spread, ~1–4 vol points for SPY, per the academic variance-risk-premium literature). Every assumption lands in the card as a named constant; a `--iv-assumption` flag stresses it
+- **Exit test:** 10 sampled paths × N underlyings, per-strategy: POP, avg P/L per trade, max concurrent drawdown, and the *distribution* (not one lucky path). The variance-risk-premium assumption must be stated, stressed, and cited — it IS the edge being modeled.
+
+**A2.2 — Mover universe (the "world model of movers"):**
+- Extend beyond the current 5 tickers: the premium-selling universe wants high-liquidity, high-IV, *non-correlated* underliers — index ETFs (SPY/QQQ/IWM), sector ETFs (XLF/XLE/XLU), large-cap movers (TSLA/NVDA/AMD), plus the pairs/reversion candidates
+- Build the correlation matrix from 2015+ daily data; the "world model" is: per-ticker vol regime + pairwise correlation clusters + IV-premium estimate per name. The Jev gate then reads this state (its regime vocabulary: trend/chop/crisis maps directly to premium-selling regime selection)
+- *Exit: universe table with vol regime, IV-RV spread estimate, correlation clusters — the watcher brief consumes it daily*
+
+**A2.3 — Which strategies to implement first (Sosnoff's own ranking, risk-adjusted for a machine):**
+1. **Short puts / short put spreads** — mechanical, defined-risk variants first (put spreads before naked puts), cleanest to backtest synthetically
+2. **Iron condor / unbalanced condor** — the workhorse defined-risk premium structure
+3. **Short strangles** — the biggest earner per Sosnoff, but undefined risk → implement with the kill-switch architecture and a margin-aware sizing cap (RiskLimits.max_order_notional applies per wing)
+4. **Covered calls + wheel** — trivially backtestable from equity data alone (no options pricing needed beyond strike selection)
+5. Jade lizard / ratio spreads / BWB — after the first three demonstrate, they're spread combinations of the same primitives
+- Management rules from the video, encoded as code: 16–45 DTE, ~16-delta shorts, manage at 21 DTE, take profit at 50% max profit, size small, trade often, non-correlated underlying selection
+
+**A2.4 — Integration with the existing desk:**
+- The TSMOM engine and the premium-selling track are **separate strategies with one risk constitution** — the kill switch, RiskLimits, and Jev veto sit above both
+- Sizing for premium: defined-risk strategies get max-loss-based sizing (RiskLimits.max_order_notional on max loss, not notional); naked strangles/puts get BP-effect-based caps
+- The regime veto maps naturally: Jev `trend` regime = TSMOM track; `chop` regime = premium-selling regime; `crisis` = veto both. One state, two engines
+
 ### Phase B — Demonstration (weeks 3–5, no money at risk)
 - **B1 — Daily demonstration run:** agent in paper mode runs the full cycle each market day: fetch (staleness-gated) → signals → sizing → Jev veto → paper orders → heartbeat. Runs under the *factory loop*: a card per day is overkill — the daily run writes a report file; bandit processes improvement cards in parallel.
 - **B2 — Demonstration ledger:** every day, one markdown entry: signals, veto decision (with Jev provenance), paper P&L, drawdown vs kill-switch line, and *what the strategy would have done differently*. This is the "demonstrate strategies for making money and managing risk" requirement, in writing, daily.
@@ -94,5 +125,7 @@ Cards to file:
 
 - `.bandit/goal/goal.md` — the objective (unchanged; it is the constitution)
 - `desk/plans/typesafe-integration-plan.md` — Jev gate, subtract-only, fail-closed
+- [Sosnoff: 11 "Boring" strategies](https://www.youtube.com/watch?v=Z__VENA80Bo) — the premium-selling track's strategy list, management rules (16–45 DTE, 16-delta, manage 21 DTE, 50% profit take), and the 70% reveal (strangles + short puts)
+- Academic backing for the IV-overstatement premise: variance risk premium literature (Carr & Wu 2009; Bollerslev Tauchen Zhou 2009) — the premium seller's edge is measurable, which is what makes A2.1's assumption honest rather than hopeful
 - `docs/plans/laya-decision-model-plan.md` — the decisions port (implemented) demonstrability question
 - bandit docs: [architecture.md](../architecture.md) · [appropriations.md](../appropriations.md)
