@@ -492,7 +492,14 @@ const COMMANDS: Command[] = [
         // INTERACTIVE (no initial prompt on the command line), then wait for
         // boot, then inject the prompt as a typed message.
         const model = extractModelArg(cfg.args ?? []);
-        const tuiArgs = agentLaunch(cfg.command ?? "opencode", model, "tui");
+        // Role-scoped capability profiles: each serf boots ITS opencode agent
+        // (.opencode/agents/<role>.md — per-project permission profile:
+        // critic read-only, actor edit+bash, master deny sudo/rm-rf). The
+        // profile is the YAML capability contract; the harness enforces it.
+        const roleArg = existsSync(join(banditDir(), ".opencode", "agents", `${role}.md`)) && (cfg.command ?? "opencode") === "opencode"
+          ? ["--agent", role]
+          : [];
+        const tuiArgs = [...agentLaunch(cfg.command ?? "opencode", model, "tui"), ...roleArg];
         const argStr = tuiArgs.map((a) => JSON.stringify(a)).join(" ");
         const tuiCommand = cfg.command ?? "opencode";
         const scratch = join(process.cwd(), ".bandit", "tmp");

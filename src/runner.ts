@@ -709,7 +709,16 @@ export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult;
   mkdirSync(outputsDir, { recursive: true });
   const outputPath = join(outputsDir, `run-${Date.now().toString(36)}.md`);
 
-  const run = await runTransport(opts.transport, prompt, opts.cardDir, outputPath, opts.timeoutMs ?? 600_000);
+  // Role-scoped capability profile: if the project defines an opencode agent
+  // profile for this serf (.opencode/agents/<serf>.md), select it so the
+  // harness enforces the serf's permission contract (critic read-only, etc.).
+  // cardDir = <root>/.bandit/board/<col>/<card> → root is four levels up.
+  const agentProfile = join(opts.cardDir, "..", "..", "..", "..", ".opencode", "agents", `${serf.name}.md`);
+  const transport = opts.transport.kind === "headless" && opts.transport.command === "opencode" && existsSync(agentProfile)
+    ? { ...opts.transport, args: [...opts.transport.args, "--agent", serf.name] }
+    : opts.transport;
+
+  const run = await runTransport(transport, prompt, opts.cardDir, outputPath, opts.timeoutMs ?? 600_000);
   let gate = parseGate(run.output);
 
   // container stage
