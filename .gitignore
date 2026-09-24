@@ -2,3 +2,4 @@ node_modules/
 bin/cli.js
 *.log
 .DS_Store
+.bandit/
