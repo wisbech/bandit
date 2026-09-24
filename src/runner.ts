@@ -201,7 +201,6 @@ export async function runTransport(cfg: TransportConfig, prompt: string, cwd: st
     const stalled = (stallTurns: number, stallLimit: number) => stallTurns >= stallLimit;
     const stallLimit = 6; // 6 x 10s = 60s of zero growth = stuck (after grace)
     const stallGraceMs = 180_000;
-    const stallGraceMs = 180_000;
     // Environment discipline enforced, not instructed: TMPDIR is redirected
     // into the project for every headless spawn, so serfs never scratch in
     // the system /tmp (and opencode never asks for external_directory /tmp).
