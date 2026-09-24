@@ -112,7 +112,15 @@ export function parseCriticVerdict(text: string): CriticVerdict {
   const reasoningMatch = text.match(/REASONING:\s*(.+)/i);
   // No parseable verdict = plumbing failure. Never fails the actor.
   if (!verdictMatch && !confidenceMatch && !reasoningMatch) {
-    return { verdict: "uncertain", confidence: 0, reasoning: "empty/unparseable critic response — plumbing, retry critic", plumbing: true };
+    // The model has two masters: the serf prompt demands VERDICT:, but a
+    // leaked global system prompt (e.g. PAI mode headers) makes it answer in
+    // its own format. Detect that shape so the repair turn can say exactly
+    // what was wrong instead of a generic "plumbing".
+    const leakedFormat = /PAI \||NATIVE MODE|ALGORITHM MODE|MINIMAL\b/i.test(text);
+    const reasoning = leakedFormat
+      ? "critic answered in its harness's own format (global system prompt leaked into serf lane) — repair turn must restate: reply with ONLY the VERDICT:/CONFIDENCE:/REASONING: block"
+      : "empty/unparseable critic response — plumbing, retry critic";
+    return { verdict: "uncertain", confidence: 0, reasoning, plumbing: true };
   }
   return {
     verdict: (verdictMatch?.[1]?.toLowerCase() ?? "uncertain") as CriticVerdict["verdict"],
@@ -135,6 +143,7 @@ async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string,
 
   let text = "";
   let verdict: CriticVerdict | null = null;
+  let repairHint = "";
 
   // Repair loop: plumbing failures retry the CRITIC, never the actor.
   for (let turn = 0; turn <= maxRepairTurns; turn++) {
@@ -142,11 +151,14 @@ async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string,
       serfDir: criticDir,
       cardDir: card.dir,
       transport: cfg.transport,
-      vars: { "actor.output": packed.text },
+      vars: { "actor.output": packed.text, repairHint },
     });
     text = run.run.output;
     verdict = parseCriticVerdict(text);
     if (!verdict.plumbing) break;
+    // feed the specific failure back: "your last reply used the wrong format —
+    // answer with ONLY the VERDICT:/CONFIDENCE:/REASONING: block"
+    repairHint = `\n\nIMPORTANT — your previous reply was not parseable. ${verdict.reasoning} Reply with ONLY these three lines and nothing else:\nVERDICT: pass|fail|uncertain\nCONFIDENCE: 0.0-1.0\nREASONING: <evidence>`;
     emit("critic.repair", { card: card.id, turn });
   }
 
@@ -284,17 +296,50 @@ async function convergeCard(
       : "";
     const specialistDir = consecutiveSameFailure >= 2 ? lastFailedCapability : null;
     void specialistDir;
-    const { run, gate, selfVerify, evidence } = await runSerfOnCard({
-      serfDir: actorDir,
-      cardDir: currentCardDir,
-      transport: config.transport,
-      container: config.container,
-      reducer: config.reducer,
-      vars: {
-        feedback,
-        lever: leverId ? "pull the lever — your work is measured by its instrument" : "",
-      },
-    });
+    // ── Transport guard: 0-byte actor output is an immediate transport-red ──
+    // (3rd {{actor.output}} failure mode, 2026-09-24: 90 empty run files).
+    // An empty actor stdout means the transport failed — render a critic
+    // prompt anyway and you burn critic rounds on a placeholder. Retry the
+    // actor round up to 2× before surfacing transport.red; never feed the
+    // critic an empty/placeholder input.
+    let run: Awaited<ReturnType<typeof runSerfOnCard>>["run"];
+    let gate: Awaited<ReturnType<typeof runSerfOnCard>>["gate"];
+    let selfVerify: Awaited<ReturnType<typeof runSerfOnCard>>["selfVerify"];
+    let evidence: Awaited<ReturnType<typeof runSerfOnCard>>["evidence"];
+    {
+      let attempt = 0;
+      let result: Awaited<ReturnType<typeof runSerfOnCard>> | null = null;
+      while (attempt < 3) {
+        result = await runSerfOnCard({
+          serfDir: actorDir,
+          cardDir: currentCardDir,
+          transport: config.transport,
+          container: config.container,
+          reducer: config.reducer,
+          vars: {
+            feedback,
+            lever: leverId ? "pull the lever — your work is measured by its instrument" : "",
+          },
+        });
+        if (result.run.output.trim().length > 0) break;
+        attempt += 1;
+        emit("transport.empty_output", { card: card.id, round, attempt, bytes: result.run.output.length });
+      }
+      if (attempt > 0) emit("transport.retried", { card: card.id, round, emptyAttempts: attempt, recovered: result !== null && result.run.output.trim().length > 0 });
+      ({ run, gate, selfVerify, evidence } = result!);
+      if (run.output.trim().length === 0) {
+        // transport red even after retries: skip the critic entirely, treat as red round
+        emit("transport.red", { card: card.id, round, emptyAttempts: attempt + 1 });
+        recordSpend(parseCard(currentCardDir), run.tokensUsed);
+        if (leverId) conf.weaken(config.root, leverId, `round ${round}: transport red — empty actor output`);
+        if (round >= maxRetries) {
+          moveCard(card, "review");
+          emit("task.failed", { card: card.id, reason: "transport-empty-output", attempts: round });
+          return "no-convergence";
+        }
+        continue; // next round, fresh actor attempt
+      }
+    }
     if (selfVerify?.attempted && selfVerify.actualExitCode !== selfVerify.reportedExitCode) {
       emit("gate.selfverify", { card: card.id, round, reported: selfVerify.reportedExitCode, actual: selfVerify.actualExitCode });
     }
