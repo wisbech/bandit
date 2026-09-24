@@ -194,8 +194,13 @@ export async function runTransport(cfg: TransportConfig, prompt: string, cwd: st
     // v2's key insight: write output to a FILE and poll for growth, so a
     // stalled agent (0% CPU, empty output) is detectable and killable.
     // opencode streams to the file; we poll size every 10s.
+    // Cold-start grace: a local model's first load (ollama pulling GBs into
+    // VRAM) shows as 0% CPU on the agent proc for minutes. The stall counter
+    // only arms 3 minutes in — model load is not death (3rd {{actor.output}}
+    // failure mode, 2026-09-24: 34 empty runs, ollama cold = 0% CPU).
     const stalled = (stallTurns: number, stallLimit: number) => stallTurns >= stallLimit;
-    const stallLimit = 6; // 6 x 10s = 60s of zero growth = stuck
+    const stallLimit = 6; // 6 x 10s = 60s of zero growth = stuck (after grace)
+    const stallGraceMs = 180_000;
     const proc = Bun.spawn([cfg.command, ...cfg.args, prompt], {
       cwd,
       stdout: "pipe",
@@ -224,14 +229,17 @@ export async function runTransport(cfg: TransportConfig, prompt: string, cwd: st
           const cpuOut = Bun.spawnSync(["ps", "-o", "%cpu=", "-p", String(proc.pid)]).stdout.toString().trim();
           const cpu = parseFloat(cpuOut) || 0;
           // A TUI agent alternates: bursts of CPU while generating, idle
-          // while streaming. Stall = 0% CPU for many consecutive checks.
+          // while streaming. Stall = 0% CPU for many consecutive checks —
+          // but only AFTER the cold-start grace (model load ≠ death).
+          const elapsed = Date.now() - startedAt;
+          if (elapsed < stallGraceMs) { lastCpu = cpu; return; }
           if (cpu < 1) stallTurns += 1; else stallTurns = 0;
           lastCpu = cpu;
         } catch { stallTurns += 1; }
         const elapsed = Date.now() - startedAt;
         if (elapsed > timeoutMs) { try { proc.kill(); } catch {} finish(true); }
         else if (stalled(stallTurns, stallLimit)) {
-          console.log(`      ⊘ agent stalled (0% CPU × ${stallLimit} checks) — killing`);
+          console.log(`      ⊘ agent stalled (0% CPU × ${stallLimit} checks after grace) — killing`);
           try { proc.kill(); } catch {}
           finish(true);
         }
