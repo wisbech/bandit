@@ -85,7 +85,7 @@ The spawn discipline (from the existing specialist mechanism, hardened):
 - **The master proposes** the expert need (it knows what it's building — "I need options-pricing expertise for card 010") — its proposal is a field on the card or a consult request, not a side-channel
 - **The loop resolves** registry → consult / spawn mechanically
 - **The critic reviews the consult** as part of intake: a consult that says "criteria are impossible" rewrites the card before the actor runs — the critic's pre-build voice, which it just told us it lacks
-- **The human owns the corpus, not the roster** (see §5.1): what knowledge exists in the project is a fact; who the factory consults is an emergent factory decision
+- **The researcher serf grows the corpus** (see §5.1): knowledge added with sources becomes corpus experts; the human audits provenance, the ledger measures usefulness
 
 ## 5. What this is NOT
 
@@ -102,7 +102,7 @@ An earlier draft had the principal pre-registering experts at configuration time
 - **Pruned by the ledger**: experts that consult repeatedly without improving convergence outcomes decay to `dead` exactly like levers — the registry is a projection of measured usefulness, not a roster someone maintains.
 - **Evolving toward the goal**: as the goal sharpens (the goal.md is fixed; the *path* to it is discovered), the domains the factory needs change. The refiner reads the event log for consult patterns — repeated escalations in a domain with no expert = the emergent signal that the next expert should be spawned. The registry follows the goal; it is never ahead of it.
 
-**What the human DOES own**: the *corpus* (T2) — what knowledge exists in the project (`references/`, `Knowledge/`) is a fact about the project, not a factory decision. The factory decides who to *consult*; the project decides what's *true*. That boundary keeps the human at configuration-of-facts, not configuration-of-behavior.
+**What the human DOES own**: the *initial* corpus — what knowledge exists in the project at setup (`references/`, `Knowledge/`) is a fact about the project. But the corpus is not frozen: **a researcher serf can grow it.** The watcher/research lane already fetches briefs; its citations, distilled patterns, and validated references belong in the corpus too — written as files, cited with sources, and registered as corpus experts when they prove consultable. The boundary that matters is not "human writes, serfs read" — it's **evidence-gated growth**: corpus additions from researcher serfs carry sources (URL + timestamp, the watcher's existing discipline), land as files, and the refiner promotes frequently-cited additions into the registry. The factory grows what it knows; the ledger measures what it learned; the human audits the provenance.
 
 ## 6. Sequencing
 
