@@ -639,6 +639,52 @@ const COMMANDS: Command[] = [
     },
   },
   {
+    name: "decisions",
+    summary: "decision-evaluator health — reachability, question stats (adapter-agnostic)",
+    fn: async () => {
+      if (!existsSync(banditDir())) fail("no .bandit/");
+      const { loadDecisionConfig, resolveDecisionPort } = await import("./decisions");
+      const cfg = loadDecisionConfig(process.cwd());
+      console.log(`\n  ═══ DECISION EVALUATOR ═══════════════════════`);
+      if (!cfg) {
+        console.log(`  · none configured — add to .bandit/config.json:`);
+        console.log(`      "decisions": { "evaluator": "systemone", "endpoint": "http://127.0.0.1:8770" }`);
+        console.log(`  · evaluator "systemone" speaks the SystemOne wire protocol — served by`);
+        console.log(`        laya-serve (local, Apache-2.0) OR TypeSafe's hosted Jev, same wire`);
+        console.log(`  → run locally: pip install "laya[serve]" && laya-serve`);
+        console.log(`  → with no evaluator, all decision questions fail closed;`);
+        console.log(`        factory behavior is unchanged\n`);
+        return;
+      }
+      console.log(`  evaluator: ${cfg.evaluator} · endpoint: ${cfg.endpoint}${cfg.model ? ` · model: ${cfg.model}` : ""}`);
+      const t0 = Date.now();
+      const port = resolveDecisionPort(cfg);
+      const demo = await port.demonstrates("The file must contain HELLO_WORLD", "HELLO_WORLD");
+      const ms = Date.now() - t0;
+      if (demo !== null) {
+        console.log(`  ✓ ${cfg.evaluator} reachable — answered in ${ms}ms`);
+      } else {
+        console.log(`  ✗ no answer in ${ms}ms — fail-closed (factory runs unchanged)`);
+      }
+      // event stats from the log
+      const { readEvents } = await import("./loop");
+      const events = readEvents();
+      const gate = events.filter((e) => e.type === "decisions.gate");
+      const vacuous = events.filter((e) => e.type === "decisions.vacuous");
+      const lowDemo = events.filter((e) => e.type === "decisions.low_demonstrability");
+      const sim = events.filter((e) => e.type === "decisions.failure_similarity");
+      console.log(`  events: ${gate.length} gate checks · ${vacuous.length} vacuous · ${lowDemo.length} low-demonstrability · ${sim.length} similarity`);
+      if (gate.length > 0) {
+        const withDemo = gate.filter((e) => typeof e.demonstrates === "number");
+        if (withDemo.length > 0) {
+          const avg = withDemo.reduce((s, e) => s + Number(e.demonstrates), 0) / withDemo.length;
+          console.log(`  demonstrability: mean ${avg.toFixed(2)} over ${withDemo.length} gate checks`);
+        }
+      }
+      console.log();
+    },
+  },
+  {
     name: "help",
     summary: "this message",
     fn: () => {

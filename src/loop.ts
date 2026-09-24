@@ -1,6 +1,12 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { parseCard, findCardDir, runSerfOnCard, parseGate, type TransportConfig, type CardFolder } from "./runner";
+import { askRoundGate, type DecisionPort } from "./decisions";
+
+// The decision port (dependency inversion): the loop consumes this interface
+// only. Adapters (systemone/laya, jev, future evaluators) live elsewhere and
+// register themselves. null = no evaluator; every question returns null.
+let decisionPort: DecisionPort | null = null;
 
 // loop.ts — the only imperative code in bandit.
 // Poll board → pick frontier card → run pipeline → emit events → refiner check.
@@ -303,6 +309,24 @@ async function convergeCard(
     const green = gate.green;
     emit(green ? "verification.green" : "verification.red", { card: card.id, round, command: gate.command, selfVerified: selfVerify?.attempted ?? false });
 
+    // ── Decision-port round gate (fail-closed: no evaluator → no questions) ──
+    // The loop asks bandit's own questions through the DecisionPort; which
+    // evaluator answers (Laya, Jev, future harness) is invisible here.
+    if (decisionPort && gate.command && selfVerify?.outputPath && existsSync(selfVerify.outputPath)) {
+      const verifLog = readFileSync(selfVerify.outputPath, "utf-8");
+      const acceptance = (card.body.match(/## Acceptance\n([\s\S]*?)(?=\n## |$)/)?.[1] ?? "").slice(0, 2000);
+      const answers = await askRoundGate(decisionPort, {
+        demonstrates: acceptance,
+        verificationOutput: verifLog.slice(0, 6000),
+        verificationCommand: gate.command,
+      });
+      if (answers.demonstrates !== null || answers.vacuous !== null) {
+        emit("decisions.gate", { card: card.id, round, demonstrates: answers.demonstrates, vacuous: answers.vacuous });
+        if (answers.vacuous !== null && answers.vacuous > 0.7) emit("decisions.vacuous", { card: card.id, round, probability: answers.vacuous });
+        if (answers.demonstrates !== null && answers.demonstrates < 0.3) emit("decisions.low_demonstrability", { card: card.id, round, probability: answers.demonstrates });
+      }
+    }
+
     // Critic evaluates (on green output) or TRIAGES (on red — cheap redirect).
     const { verdict, verdictPath } = await runCritic(config, parseCard(currentCardDir), lastOutput);
     emit("critic.verdict", { card: card.id, round, verdict: verdict.verdict, confidence: verdict.confidence, plumbing: verdict.plumbing, verdictPath });
@@ -325,7 +349,21 @@ async function convergeCard(
     );
     const capabilityMatch = triage.verdict.reasoning.match(/missing[:\s]+([A-Za-z0-9 _-]{4,60})/i);
     const missingCapability = capabilityMatch?.[1]?.trim() ?? null;
-    if (missingCapability && missingCapability === lastFailedCapability) {
+    // Failure-similarity through the decision port (graded when an evaluator
+    // is configured; regex-only when not).
+    let similarity: number | null = null;
+    if (decisionPort && round >= 2) {
+      similarity = await decisionPort.failureSimilarity(
+        (roundHistory[roundHistory.length - 1]?.reasoning ?? "").slice(0, 2000),
+        verdict.reasoning.slice(0, 2000),
+      );
+      if (similarity !== null) emit("decisions.failure_similarity", { card: card.id, round, similarity });
+    }
+    if (similarity !== null) {
+      // graded: ≥0.6 = same failure, ≤0.3 = different
+      if (similarity >= 0.6 && missingCapability) consecutiveSameFailure += 1;
+      else if (similarity <= 0.3) consecutiveSameFailure = 1;
+    } else if (missingCapability && missingCapability === lastFailedCapability) {
       consecutiveSameFailure += 1;
     } else {
       consecutiveSameFailure = 1;
@@ -374,6 +412,11 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
   ensureScaffold();
   let processed = 0, completed = 0, failed = 0;
   const maxRetries = config.maxRetries ?? 3;
+
+  // Decision port: resolved once per loop from config. null port when no
+  // evaluator is configured — every question answered "no evaluator".
+  const { loadDecisionConfig, resolveDecisionPort } = await import("./decisions");
+  decisionPort = resolveDecisionPort(loadDecisionConfig(config.root));
 
   // Resume stranded in-progress cards (from interrupted runs) + fresh backlog.
   const frontier = [...cardsIn("in-progress"), ...cardsIn("backlog")];
