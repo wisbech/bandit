@@ -84,6 +84,9 @@ Beacon measures token efficiency. Bandit's routing question is narrower: **fract
 - [Cross-Harness Memory docs](https://docs.beacon.sh/concepts/cross-harness-memory.md) — the review-gated loop, storage scope, privacy boundary
 - [Detection engine docs](https://docs.beacon.sh/detections/engine.md) — rules-over-ordered-events; the `oracle_waste` refiner class could later run as detection YAML against bandit's own event log
 - [TypeSafe Jev / System One](https://typesafe.dev) — typed questions, probabilities, no rationale (the desk plan §1 documents the primitives)
+- [Jev Engineering for Coding Agents — working note (Almeida synthesis)](https://drive.google.com/file/d/17h982xvsL3E7b80iGmOCfKp9qTOW9ohv/view) — the no-KV-cache design question, the routing trap, retrieval dominance, visibility ladder (reviewed in §6.1)
+- [Skill2Env (NVIDIA)](https://github.com/NVlabs/Skill2Env/blob/main/paper/Skill2Env_arXiv.pdf) — Oracle/NOP environment acceptance, rubric-vs-tests separation (reviewed in §6.2)
+- [Self-Organizing Agent Teams (Stanford/Together)](https://arxiv.org/html/2609.22682v1) — routing-oracle baseline, demonstrability, frozen strategy banks (reviewed in §6.3)
 - Local prior art: `desk/plans/typesafe-integration-plan.md` (safety philosophy, fail-closed wrapper, SDK 0.7.0 quirks)
 - This appropriation joins [docs/appropriations.md](appropriations.md) if built.
 
@@ -92,3 +95,52 @@ Beacon measures token efficiency. Bandit's routing question is narrower: **fract
 1. Should route records live in the confidence ledger (lever-like, Thompson-sampled) or a separate `routing.json`? *(Leaning: ledger — same data shape, one governor.)*
 2. Is Jev dispatch-time worth it at all below ~5 cards/day, or is shape-routing + master reading enough until the tree is 3+ factories deep? *(My lean: P0–P1 are nearly free and inform P2; P2 is the real decision point.)*
 3. Does the critic get a standing veto on routes (subtractive-only, consistent with the desk) or only on cards? *(Lean: standing veto — it's the same gate we trust for work.)*
+
+---
+
+## 6. Evaluation update — deeper background review (2026-09-23)
+
+Three additional sources reviewed before any build. **Verdict up front: the original plan survives, but it was aimed at the wrong-sized target. The evidence reorders our priorities.**
+
+### 6.1 The Jev Engineering notes (Almeida/TypeSafe synthesis, 12pp working note)
+
+*Source: [Google Drive working note](https://drive.google.com/file/d/17h982xvsL3E7b80iGmOCfKp9qTOW9ohv/view)*
+
+The note's organizing question — *how would you design a coding agent if LLMs had no KV cache?* — reframes everything. Six "symptoms of the KV cache" that agents inherit unexamined. The two findings that touch bandit directly:
+
+- **The routing trap (§III-A):** mixed-model routes lose money *because of context transport*, not token price. Their worked example: Opus→Sonnet→Opus costs 6.19 vs 4.15 for pure Opus on a plausible session shape — the "cheap" route costs ~⅓ more. **This directly challenges our plan's P2**: if a child factory needs the parent's context reloaded, Jev-routed delegation can cost *more* than local execution. Bandit is actually structurally advantaged here — cards are purpose-built contexts by construction — but the plan never priced the return trip. **Revision: routing decisions must be priced per-context-rebuild, not per-token. The route ledger must record context-size deltas, not just outcomes.**
+- **Retrieval dominates (§III):** reading/searching/command output ≈ two-thirds of processed tokens; writing < 10%. Bandit's biggest efficiency lever isn't compaction — it's *not loading what isn't needed*. Our ObservationPack + round digests already push this way; the visibility-ladder idea (per-query visibility: hide/short/long/full) is a stronger framing than our fixed excerpt. **Appropriation candidate: the ladder, at the next critic-input iteration.**
+- **Programmable permissions as policy code** (deny if touches `.env*`, ask if writes outside repo root) — bandit's verification gate could adopt this shape cheaply. Note only; the gate already does the heavy lifting.
+- **Skill tiered disclosure** (snippet-first, full schema on demand) — relevant to how bandit serfs discover each other later; park it.
+
+### 6.2 Skill2Env (NVIDIA)
+
+*Source: [paper PDF](https://github.com/NVlabs/Skill2Env/blob/main/paper/Skill2Env_arXiv.pdf)* — turns public Agent Skills into 8k executable environments with programmatic tests + behavioral rubrics, then RLs on them.
+
+This is an RL-training recipe; nothing in bandit trains weights. But two verification disciplines are directly appropriable:
+
+- **Oracle/NOP acceptance**: a candidate environment is accepted only if the oracle test passes on the reference solution AND fails on a no-op (NOP). *A verifier that passes on nothing verifies nothing.* Bandit's analogue: a card whose verification command passes without the actor doing anything is a broken card. **Appropriation: gate-fingerprint the empty state — if a card's verification command is green on the untouched repo, flag `verification.vacuous` and route to review.** This closes a fabrication path the self-verify gate doesn't cover: the *pre-passing* gate.
+- **Rubric ≠ tests**: separate verifiable correctness (tests) from procedural quality (Must-do / Must-avoid / Best-practice rubric). Bandit cards conflate these. **Appropriation candidate: optional `## Rubric` section consumed by the critic as structured review dimensions.**
+
+### 6.3 Self-Organizing Agent Teams (Stanford/Together)
+
+*Source: [arXiv 2609.22682](https://arxiv.org/html/2609.22682v1)* — fixed agent teams learn reusable teamwork strategies (roles, phases, information flow) offline; frozen banks transfer; teams beat a perfect routing oracle on math/physics (66.7% vs 59.0%).
+
+Three findings matter to bandit's roadmap:
+
+1. **Routing oracle as the honest baseline.** They refuse to credit a team for "gains" a perfect per-problem selector over members' independent answers would achieve. Bandit's planned Jev routing must be measured the same way: does Jev routing beat a *perfect selector over serf track records*? If not, the ledger alone (Thompson over outcomes) already achieves selection — Jev is only earning its keep if it predicts *before* the track record exists. **This sharpens the plan's success metric.**
+2. **Demonstrability predicts when collaboration pays (ρ=0.90).** Teams improve most where correct reasoning is *recognizable* — which is exactly the critic's job. Bandit's convergence gate (critic + verification) is a demonstrability machine. Implication: bandit's multi-serf structure pays most on cards where correctness is checkable — reinforcing verification-gated cards over open-ended ones. No build action; a portfolio-guidance insight.
+3. **Organization as a learned, frozen artifact** (strategy banks, problem-independence audits, coverage-greedy selection) is the same shape as bandit's refiner + confidence ledger: propose with evidence, validate on probes, freeze, transfer. Their "source-dependence audit" (rejecting candidates that encode source-specific content) maps to the refiner's evidence requirement. Validation, not novelty.
+
+### 6.4 Updated verdict
+
+| Original plan element | Verdict after review |
+|---|---|
+| Jev-routed card dispatch (P2) | **Weakened** — the routing-trap math says dispatch is only cheap when contexts are purpose-built (cards are) but return-trip pricing was missing. Demote to experiment-with-oracle-control: Jev routing must beat a track-record selector, not just `pipelineFor()`. |
+| Route ledger (P0) | **Strengthened** — SAT's routing-oracle lens makes the track-record ledger the reference implementation against which any Jev dispatch must prove itself. |
+| Provenance, subtract-only, fail-closed | **Unchanged** — all three sources reinforce this as the load-bearing discipline. |
+| Vacuous-gate check (new, from Skill2Env Oracle/NOP) | **New P0.5 item** — cheap, closes a real hole, no Jev dependency. |
+| Rubric section on cards (new, from Skill2Env) | **Backlog** — helps the critic; low priority. |
+| Visibility ladder for critic input (new, from Jev notes) | **Backlog** — stronger framing than fixed excerpts; do when token math justifies. |
+
+**Recommendation:** proceed with P0 (route ledger) and add the vacuous-gate check immediately (it's an afternoon, closes a real hole). Hold P2 until the route ledger has enough history to answer the routing-oracle question with bandit's own data. Jev earns its way in only if it beats the ledger selector on *new* cards — that's now a testable claim rather than an assumption.
