@@ -231,7 +231,48 @@ Both principal proposals are adopted, with one correction each:
 - [EST (2025)](https://arxiv.org/abs/2507.05619) — evaluator stress test template
 - [Udemy engineering](https://medium.com/udemy-engineering/building-a-multi-armed-bandit-system-from-the-ground-up-a-recommendations-and-ranking-case-study-8f09f65d26b6) — read for the feedback-pipeline *shape*; deliberately not adopted at bandit's volume
 - Bandit's own: [architecture.md](../architecture.md) · [appropriations.md](../appropriations.md) — entries added if built
-## 16. References
+
+## 16. Addendum — delayed rewards & the reward model (principal feedback, adopted with reconciliations)
+
+The principal's addendum tightens §15 with three structural corrections. Adopted; reconciliations noted where the addendum overrides my design.
+
+### 16.1 Delayed rewards: conditional TD prediction replaces speculative λ-traces
+
+**Correction accepted:** my §15.1 λ-trace-through-the-chain design was speculative machinery for a topology bandit doesn't have yet (a handful of consults, two specialists). The actual topology is **single-step delay** — one card, one reward, card-folder join. The addendum's rule is more disciplined:
+
+- **Instrument first**: measure the staleness gap (`max_age_of_posterior > P99_latency` in >5% of decisions under load). Only then implement TD prediction (predict-then-correct: update posteriors immediately with the predicted reward, apply TD-error correction on arrival). The `pending` map keyed by card id reuses the existing join.
+- **Hierarchical credit is conditional too**: only if learning is *joint* across lever × expert × route (composites as independent arms until then). The expert-evocation plan's consults keep a `usage` count (not a posterior) until the joint-learning trigger fires — this *also* resolves §5.1's open question: corpus experts measured by citation, not posteriors, is now the permanent default, not a stopgap.
+- **What survives from §15.1**: the XCS accuracy-fitness second moment (`mean·(1−var)` ranking) — that's not a chain mechanism, it's a Goodhart-resistant property of the selection itself, and it costs one line.
+
+### 16.2 The reward model: Bandit Forest + MoE gating, floors forbidden to learn
+
+**Correction accepted:** §15.2's per-criterion posterior voters answered "is lever L good for criterion k" *globally*. The addendum's two-stage model answers it **contextually**:
+
+- **Stage 1 — Bandit Forest per objective** ([Féraud et al., AISTATS 2016](https://proceedings.mlr.press/v51/feraud16.html)): online forest mapping context → expected score, near-optimal w.r.t. an oracle forest; per-leaf variance = epistemic uncertainty for the exploration bonus; depth 3–5 (sample complexity O(2^D)); successive elimination prunes dominated arms at leaves. One forest per objective, never for the composite.
+- **Stage 2 — MoE gating** ([ArmoRM, Wang et al. EMNLP 2024](https://arxiv.org/abs/2406.12845)): a *shallow* MLP (context → per-objective weights, softmax, no criterion > 0.5). Replaces static weights in goal-vector.jsonl — context-dependent weighting, uniform until data says otherwise.
+- **Floors are the Goodhart defense and are NOT learnable** (dominant-objective formulation, [Tekin & Turgay 2018](https://arxiv.org/abs/1708.05655)): violation → *infeasible* → reward = 0, not a penalty. The gating network learns weights only; if it could learn floors it could silence the objective that holds it to account — the self-grading loophole, closed by construction.
+- **The forest is the reward model, NOT the policy** — Thompson sampling over composite arms stays the policy at bandit's arm count (the addendum's own caveat: forest value is modeling the surface, not choosing arms at small K).
+
+**Reconciliation with §15.2:** the per-criterion learners don't die — they *migrate*. At current volume (tens of cards, thin context): per-criterion Beta learners + lexicographic veto/rank ordering, exactly as designed. The forest + gating become the *upgrade path* when context features exist (TFD's A2.2 world model: vol regime, correlation cluster, IV−RV spread as the context vector) — the same lexicographic architecture, with the context→score mapping learned instead of tabulated. The Q-decomposition semantics (floors veto, primary ranks, Pareto on the rest) is the *composition rule* in both stages — that's the part that's Goodhart-proof and it doesn't change.
+
+### 16.3 The decision tree the addendum gives the builder (verbatim structure)
+
+| Build now | Build when triggered | Forbidden |
+|---|---|---|
+| hard-floor enforcement (pre-scalarization veto, test: suppressed objective ⇒ composite 0) | TD prediction (staleness gap > 5% of decisions) | learned floors (self-grading loophole) |
+| per-criterion posterior learners + lexicographic composition | Bandit Forest per objective (context features exist) | single scalar reward (vector until gating, post-floor) |
+| XCS accuracy-fitness in selection | MoE gating (uniform weights → learned shifts, on forest scores) | full bucket brigade (wrong topology) |
+| staleness instrumentation | hierarchical credit (joint lever×expert×route learning) | Kafka/Redis (volume), KL regularization (Kwa et al.), LMT (forest already piecewise-linear) |
+
+### 16.4 Updated references (addendum's, adopted)
+
+- [Féraud et al. 2016 — Random Forest for the Contextual Bandit](https://proceedings.mlr.press/v51/feraud16.html) — the per-objective reward surface
+- [Wang et al. 2024 — ArmoRM / MoE gating](https://arxiv.org/abs/2406.12845) — context-dependent weights; shallow MLP, kept shallow
+- [Tekin & Turgay 2018 — dominant objective](https://arxiv.org/abs/1708.05655) — floors as feasibility constraints; infinite-regret framing for violating arms
+- [Wanigasekara et al. 2019 — MOU-UCB](https://www.ijcai.org/proceedings/2019/) — learning reward vector AND utility function in a bandit-native form
+- [MultiScale Contextual Bandits (2025)](https://arxiv.org/abs/2503.17674) — nested bandits across time horizons, if multi-horizon objectives arrive
+
+## 17. References
 - [Russell & Zimdars 2003 — Q-decomposition](https://russell.inso.man.ac.uk/downloads/rl/q-decomposition.pdf) — per-reward learners, union/composition semantics (§15.2)
 - [Prioritized Soft Q-Decomposition (2024)](https://arxiv.org/abs/2106.02844) — lexicographic constraint-vs-preference learners (§15.2)
 - [Wilson 1995 — XCS accuracy-based fitness](https://doi.org/10.1109/ICNN.1995.488965) — the variance-penalized second moment (§15.1)
