@@ -153,7 +153,75 @@ Plus the EST perturbation harness: the stress test applies format/context pertur
 - **KL-divergence regularization of the policy** — Kwa et al. prove it doesn't survive heavy tails; capping + divergence monitoring + floor is the stack that does
 - **A separate "true objective scorer" service** — the held-out channel uses bandit's own existing organs (verify suite, fresh critic, decisions port) run *independently*; adding a dedicated scorer duplicates them
 
-## 14. References
+## 15. Research expansion — the two reframings (2026-09-25)
+
+The principal proposed two structural upgrades. Both are better than what the original design sketched. Research and verdicts:
+
+### 15.1 Bucket-brigade for delayed rewards — bandit's own credit assignment, formalized
+
+**The insight:** confidence.ts already implements Holland's bucket brigade ([Learning Classifier Systems, 1985](https://doi.org/10.1016/B978-1-4832-1443-5.50022-X)) — each claim's strength propagates backward along the corroborating chain: a lever strengthens when the measure it moved corroborates, the measure strengthens when the goal-clause it feeds corroborates, and *silence is never agreement*. That is precisely a delayed-reward credit assignment scheme — no queue, no explicit reward pipe needed.
+
+**The upgrade path the literature points to — eligibility traces (Sutton 1988; [Sutton & Barto 2018 ch. 12](https://rail.eecs.berkeley.edu/eecs127-f21/hw/wk8-SuttonBarto.pdf)):** the bucket brigade is a special case of an eligibility trace: each card in the chain holds a decaying "credit eligibility" for every lever it touched, and a delayed payoff flows back through *all* recent contributors, discounted by recency. Mechanically in bandit:
+
+```
+card converges → reward r (vector, §5)
+  → for each lever/expert/consult touched by this card (trace φ from card lineage):
+      lever.α += λ^(age_in_chain) · w_criterion · r_criterion   (λ ≈ 0.85)
+      lever.flatPulls reset only for λ^age · r above threshold
+  → chain = card → consults → spawned-experts → parent decisions
+```
+
+What this buys over the current per-card update: **credit reaches the whole causal chain in one step** — a consult that *shaped* a card (expert evocation) and the specialist whose research *designed* the actor's approach both get their slice of the payoff, discounted by chain distance. Today they get nothing (only the pulled lever updates), so consults are ledger-blind work — the exact failure mode of 7N.
+
+**Also worth stealing: XCS's accuracy-based fitness ([Wilson 1995](https://doi.org/10.1109/ICNN.1995.488965)).** Holland's brigade has a known pathology — strong-but-wrong classifiers survive via parasitic chains. XCS replaced raw strength with *accuracy of prediction* + strength. Bandit's analogue: a lever's fitness = posterior mean × (1 − posterior variance) — a lever that converges cards *unpredictably* (huge variance) loses fitness even with high mean. That's a Goodhart-resistant second moment, and it's one line in `thompsonRank`: sample from the posterior but rank candidates by `mean·(1−var)` for exploitation slots. Test in the gaming sim: variance-gaming (an arm that spikes rewards occasionally) must lose to a steady arm under fitness ranking.
+
+### 15.2 The goal-vector as per-criterion learners — Q-decomposition, not a weighted sum
+
+**The insight:** the original design's "weighted projection of the vector" is a *linear scalarization* — and linear scalarization is exactly where Goodhart bites hardest: a gamed criterion can buy total score with weight it doesn't deserve. The principal's forest intuition is the fix: **don't scalarize early; give each criterion its own learner and vote late.**
+
+**The literature — [Q-decomposition (Russell & Zimdars 2003, ICML)](https://russell.inso.man.ac.uk/downloads/rl/q-decomposition.pdf):** decompose the global reward into per-reward-function Q-learners; the global policy is the *composition* (product/union) of per-criterion preferences. Each sub-learner sees only its own reward stream and votes; an action is good only if no sub-learner strongly objects (union semantics). In bandit's governor this becomes:
+
+```
+goal-vector.jsonl = K criteria, each with ITS OWN posterior pair (α_k, β_k)
+per criterion k:   "has pulling lever L been good for criterion k?"
+selection:         sample from each criterion's posterior;
+                   lever L wins only if it dominates on the lexicographic
+                   ordering (floored criteria first, then primary, then
+                   Pareto-non-dominated on the rest)
+```
+
+**Why this beats weights:**
+- A gamed criterion can no longer pay for another's failure — each criterion's posterior answers *its own question*. Gaming shows up as *disagreement between criteria learners* (the divergence monitor's signal, but computed from the posteriors directly — no separate held-out arithmetic needed for the basic case)
+- Hard floors become *lexicographic* (decomposition into Must-satisfy vs Optimize — cf. [Prioritized Soft Q-Decomposition, 2024](https://arxiv.org/abs/2106.02844)): maxDD ≤ 20% is a constraint-level learner that vetoes; CAGR is the preference-level learner that ranks among survivors. No weight tuning can trade a veto away.
+- **Pareto framing is the honest default for multi-objective bandits** ([Drugan & Nowé 2013](https://ieeexplore.ieee.org/document/6654133); "Are stochastic multi-objective bandits harder?" — yes, harder: Pareto-regret results, e.g. [The Role of Coordinates in Pareto Regret](https://arxiv.org/abs/2406.02334)). Bandit's ledger already stores per-claim evidence — the vector is natural state, the scalar was always the lossy compression.
+- **Random-forest flavor, adapted honestly:** the "forest" here is not regression trees over features (bandit's observations are too few for that); it's an *ensemble of per-criterion posterior learners voting lexicographically*. Where the RF analogy earns its place: **criteria can themselves be compositions** — e.g. "robustness" = AND of cost-stress-2x, jitter, seed-variance sub-learners; a criterion with sub-learners only passes if the majority agrees (a tiny forest inside one criterion). That's per-instance criteria generation (CARMO) grounded in existing evidence rather than LLM-invented.
+
+### 15.3 Revised architecture (replaces §5/§6's scalarization)
+
+```
+reward r (vector over K criteria) arrives at card convergence
+  → eligibility-trace propagation (λ-discounted) through card's causal chain
+      [levers, experts, consults, spawned researchers]
+  → per-criterion posteriors (α_k, β_k) per lever   ← NO global scalar
+  → selection: lexicographic
+      1. floor learners veto (maxDD, kill-switch, staleness — constitution)
+      2. primary criterion samples rank survivors
+      3. remaining criteria: Pareto-non-dominated set wins; exploration
+         floor forces 5% slots regardless
+  → divergence = DISAGREEMENT between criteria learners
+      + held-out channel every N cards (independent re-execution) as the
+        external check on the whole ensemble
+  → criterion retirement: a learner whose held-out disagreement persists
+    gets suspect→retired; the critic generates the replacement frontier
+```
+
+**Deliverable change:** `goal-vector.jsonl` becomes `criteria.jsonl` with per-criterion learners and *relations* (floored / primary / probe; AND-composition for compound criteria). The gaming simulation gains a second scenario: **criterion-collision gaming** — inflate a probe criterion while holding the floor learners honest, assert the lexicographic order prevents the collapse that a weighted sum would permit.
+
+### 15.4 Verdict
+
+Both principal proposals are adopted, with one correction each:
+1. **Bucket-brigade delayed rewards: yes — and bandit already runs it**; the upgrade is formalizing it as eligibility traces over the *card chain* (consults and specialists finally get credited) plus XCS accuracy-fitness (variance-penalized ranking) as the Goodhart-resistant second moment.
+2. **Forest/L-tree goal-vector: yes — but the correct ensemble unit is the per-criterion posterior learner (Q-decomposition), not regression trees**; voting is lexicographic (floors veto, primary ranks, Pareto on the rest). The RF intuition survives inside *compound criteria* (majority-vote sub-learners). A regression forest could arrive later if/when per-observation feature-rich data (market state → criterion prediction) justifies it — that's the TFD Phase A2.2 world-model card, not the governor.
 
 - [Karwowski et al. 2023 — Goodhart's Law in RL](https://arxiv.org/abs/2310.09144) — divergence threshold calibration (Corollary 1)
 - [Gao et al. 2023 — Scaling Laws for Reward Overoptimization](https://arxiv.org/abs/2210.10760) — KL-from-init as second monitor axis
@@ -163,3 +231,10 @@ Plus the EST perturbation harness: the stress test applies format/context pertur
 - [EST (2025)](https://arxiv.org/abs/2507.05619) — evaluator stress test template
 - [Udemy engineering](https://medium.com/udemy-engineering/building-a-multi-armed-bandit-system-from-the-ground-up-a-recommendations-and-ranking-case-study-8f09f65d26b6) — read for the feedback-pipeline *shape*; deliberately not adopted at bandit's volume
 - Bandit's own: [architecture.md](../architecture.md) · [appropriations.md](../appropriations.md) — entries added if built
+## 16. References
+- [Russell & Zimdars 2003 — Q-decomposition](https://russell.inso.man.ac.uk/downloads/rl/q-decomposition.pdf) — per-reward learners, union/composition semantics (§15.2)
+- [Prioritized Soft Q-Decomposition (2024)](https://arxiv.org/abs/2106.02844) — lexicographic constraint-vs-preference learners (§15.2)
+- [Wilson 1995 — XCS accuracy-based fitness](https://doi.org/10.1109/ICNN.1995.488965) — the variance-penalized second moment (§15.1)
+- [Sutton & Barto 2018 ch.12 — Eligibility traces](https://rail.eecs.berkeley.edu/eecs127-f21/hw/wk8-SuttonBarto.pdf) — λ-discounted credit through chains (§15.1)
+- [Drugan & Nowé 2013 — multi-objective bandits, Pareto front](https://ieeexplore.ieee.org/document/6654133) — Pareto selection as the honest default (§15.2)
+- [The Role of Coordinates in Pareto Regret (2024)](https://arxiv.org/abs/2406.02334) — stochastic MO-bandits are provably harder (§15.2)
