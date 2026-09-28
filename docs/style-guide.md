@@ -6,23 +6,25 @@ Sources: isoquant.ai (extracted design tokens, below), OmO's wave view (informat
 
 ---
 
-## 1. The borrowed tokens (isoquant.ai, extracted from their live CSS)
+## 1. The tokens (bandit's own palette, from the logo — layout grammar learned from isoquant.ai)
 
-The isoquant aesthetic in one line: **near-black surfaces, one quiet green, warm paper for code, hairline borders, measured weight** — data presented as evidence, never decorated.
+The aesthetic in one line: **ink surfaces, bandit orange as the working accent, cream text, warm code, hairline borders, measured weight** — data presented as evidence, never decorated. The palette comes from our own logo (`docs/bandit-icon.png`: ink `#101818`, orange `#f89800`, cream `#f8f0e0`); the *layout grammar* (numbered sections, scarcity of accent, hierarchy by brightness) is learned from isoquant.ai and credited in the site's lineage section.
 
 ### 1.1 Color
 
 | Token | Hex | ANSI approximation | Use |
 |---|---|---|---|
-| `surface` | `#101211` | `30` (near-black, slightly green) | backgrounds — the factory floor |
-| `fg` | `#e7ece8` | `37` (soft white, green-cast) | primary text |
-| `muted` | `#a7a9a8` | `90` (bright black) | secondary text, timestamps, payload keys |
-| `faint` | `#738078` | `37` dim / `38;5;102` | labels, rules, the quiet layer |
-| `accent` | `#336343` | `32` (green) + `2` (dim) | **success only** — gate green, converged, healthy |
-| `warn` | warm amber | `33`/`1;33` | in-flight, attention (the single warm note) |
-| `danger` | — | `31` | **failure only** — gate red, contradictions |
-| `summon` | — | `35` (magenta) | summoned voices only — the thread's third party |
-| `paper` | `#f5f3eb` | `97` (bright white, warm) | code/tool output, data cells |
+| `ink` (surface) | `#101818` | `30`/`90` dim | backgrounds — the factory floor |
+| `cream` (fg) | `#f8f0e0` | `37`/`97` | primary text |
+| `cream-dim` (muted) | `#b9b4a8` | `90` | secondary text, timestamps, payload keys |
+| `faint` | `#6e7a74` | `37` dim / `38;5;102` | labels, rules, the quiet layer |
+| `orange` (accent) | `#f89800` | `33`/`1;33` | **work in flight** — the actor's marker, active state, the brand note |
+| `ok` | `#6fae85` | `32` (green) | **success only** — gate green, converged, healthy |
+| `danger` | `#c25b4e` | `31` | **failure only** — gate red, contradictions |
+| `summon` | `#b58fd0` | `35` (magenta) | summoned voices only — the thread's third party |
+| `paper` | `#f8f0e0` | `97` | code/tool output, data cells |
+
+Orange vs green — the rule that keeps them honest: **orange means working, green means worked.** A card in flight is orange; a gate that passed is green; a failure is red; a summoned voice is magenta. Nothing else gets color.
 
 Hard rules (the isoquant discipline):
 - **No color without meaning.** A color says something: state, voice, or evidence class. Nothing is colored for decoration.
@@ -65,7 +67,7 @@ Hard rules (the isoquant discipline):
 | Frame (`╔══ BANDIT ══╝`) | `36` dim cyan **once** | the only "box" on screen |
 | Section headers | `1;37` + hairline | `── NAME ─────…` always same length |
 | Agent rows (`● pid`) | `36` dot, `1;37` role, `90` details | one line per worker |
-| Wave card row (`▸ id`) | `33` marker, id padded, state dim | the wave is data, not decoration |
+| Wave card row (`▸ id`) | orange `1;33` marker (in-flight = working), id padded, state dim | the wave is data, not decoration |
 | Gate cell | `32` green / `31` red / `90` none | the only state-colored cells |
 | Consult voices | master `36`, critic `90`, summoned `35` | voice identity is color identity |
 | Events tail | `90` everything | the truth is quiet |

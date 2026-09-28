@@ -4,108 +4,89 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>bandit — the agent factory</title>
-<meta name="description" content="A dark factory where AI coding agents execute work on a kanban board, argue in consult threads, and every claim is backed by verification evidence — not vibes.">
+<meta name="description" content="bandit runs AI coding agents (opencode, Claude Code, Codex, pi) on a kanban board with a mechanical verify gate, a consult thread, and a confidence ledger. Install in five commands.">
+<link rel="icon" type="image/png" href="icon.png">
 <style>
   :root {
-    --surface: #101211;
-    --surface-2: #171918;
-    --fg: #e7ece8;
-    --muted: #a7a9a8;
-    --faint: #738078;
-    --accent: #336343;
-    --accent-bright: #4d8a63;
-    --paper: #f5f3eb;
-    --line: rgba(231, 236, 232, 0.13);
-    --warn: #d9a441;
+    /* bandit's own palette — extracted from docs/bandit-icon.png */
+    --ink: #101818;        /* the dark: page background */
+    --ink-2: #0a0f0f;      /* deeper panels */
+    --orange: #f89800;     /* the accent: work being done */
+    --orange-dim: #b06a00;
+    --cream: #f8f0e0;      /* primary text */
+    --cream-dim: #b9b4a8;  /* secondary text */
+    --faint: #6e7a74;      /* labels, rules */
+    --line: rgba(248, 240, 224, 0.12);
+    --ok: #6fae85;         /* success — gate green (kept distinct from orange) */
     --danger: #c25b4e;
     --summon: #b58fd0;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
-  body {
-    background: var(--surface);
-    color: var(--fg);
-    font-family: -apple-system, "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
-    font-size: 16px;
-    line-height: 1.55;
-    -webkit-font-smoothing: antialiased;
-  }
+  body { background: var(--ink); color: var(--cream); font-family: -apple-system, "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
   code, pre, .mono { font-family: "SF Mono", SFMono-Regular, Consolas, "Liberation Mono", monospace; }
-  a { color: var(--fg); text-decoration: none; }
-  a:hover { color: var(--paper); }
-  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--cream); text-decoration: none; }
+  a:hover { color: #fff; }
+  .wrap { max-width: 1020px; margin: 0 auto; padding: 0 24px; }
 
-  /* header */
-  header { position: sticky; top: 0; z-index: 10; background: rgba(16,18,17,0.86); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line, rgba(231,236,232,0.08)); }
-  .headerInner { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  header { position: sticky; top: 0; z-index: 10; background: rgba(16,24,24,0.88); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+  .headerInner { display: flex; align-items: center; justify-content: space-between; height: 62px; }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 500; letter-spacing: -0.01em; }
-  .brand svg { display: block; color: var(--fg); }
-  nav.top { display: flex; gap: 28px; }
-  nav.top a { color: var(--muted); font-size: 14px; }
-  nav.top a:hover { color: var(--fg); }
-  .cta { border: 1px solid var(--faint); padding: 8px 16px; font-size: 14px; color: var(--fg); border-radius: 0; transition: border-color .2s; }
-  .cta:hover { border-color: var(--fg); }
+  .brand img { width: 26px; height: 26px; border-radius: 6px; }
+  nav.top { display: flex; gap: 26px; }
+  nav.top a { color: var(--cream-dim); font-size: 14px; }
+  nav.top a:hover { color: var(--cream); }
+  .cta { border: 1px solid var(--faint); padding: 8px 16px; font-size: 14px; }
+  .cta:hover { border-color: var(--orange); color: var(--orange); }
 
-  /* hero */
-  .hero { padding: 120px 0 80px; }
-  h1 { font-size: clamp(39px, 4.2vw, 62px); font-weight: 450; letter-spacing: -0.045em; line-height: 1.08; color: #f0f3ef; max-width: 720px; }
-  .hero p.lede { margin-top: 20px; font-size: clamp(18px, 1.7vw, 21px); color: var(--muted); max-width: 620px; }
-  .heroCtas { margin-top: 36px; display: flex; gap: 14px; flex-wrap: wrap; }
-  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; font-size: 15px; border: 1px solid var(--faint); color: var(--fg); transition: border-color .2s, color .2s; }
-  .btn:hover { border-color: var(--fg); }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #f0f3ef; }
-  .btn.primary:hover { background: #3e7251; border-color: #3e7a54; }
-  .badge { display: inline-block; margin-bottom: 24px; font-size: 13px; color: var(--muted); border: 1px solid var(--line, rgba(231,236,232,0.1)); padding: 4px 10px; }
+  .hero { padding: 96px 0 64px; }
+  h1 { font-size: clamp(36px, 4vw, 58px); font-weight: 450; letter-spacing: -0.045em; line-height: 1.08; color: var(--cream); max-width: 760px; }
+  h1 em { font-style: normal; color: var(--orange); }
+  .hero p.lede { margin-top: 18px; font-size: clamp(17px, 1.6vw, 20px); color: var(--cream-dim); max-width: 660px; }
+  .heroCtas { margin-top: 32px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; font-size: 15px; border: 1px solid var(--faint); color: var(--cream); transition: border-color .2s, color .2s; }
+  .btn:hover { border-color: var(--orange); color: var(--orange); }
+  .btn.primary { background: var(--orange); border-color: var(--orange); color: var(--ink); font-weight: 500; }
+  .btn.primary:hover { background: #ffa614; color: var(--ink); }
 
-  /* sections: numbered, isoquant-style */
-  section { padding: 72px 0; border-top: 1px solid rgba(231,236,232,0.08); }
-  .secLabel { color: var(--faint); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
-  h2 { font-size: clamp(29px, 3vw, 38px); font-weight: 450; letter-spacing: -0.045em; line-height: 1.1; margin: 10px 0 14px; color: #f0f3ef; }
-  .lede { color: var(--muted); max-width: 640px; font-size: 16px; }
-  .num { color: var(--faint); font-size: 13px; margin-bottom: 18px; letter-spacing: 0.08em; }
-  .num b { color: var(--fg); font-weight: 500; }
+  section { padding: 64px 0; border-top: 1px solid var(--line); }
+  .num { color: var(--faint); font-size: 13px; margin-bottom: 16px; letter-spacing: 0.08em; }
+  .num b { color: var(--orange); font-weight: 500; }
+  h2 { font-size: clamp(27px, 2.8vw, 36px); font-weight: 450; letter-spacing: -0.04em; line-height: 1.12; margin-bottom: 12px; color: var(--cream); }
+  .lede { color: var(--cream-dim); max-width: 660px; font-size: 16px; }
 
-  /* the loop diagram: terminal-styled */
-  .terminal { background: var(--surface-2); border: 1px solid rgba(231,236,232,0.1); padding: 28px 28px 12px; margin-top: 40px; overflow-x: auto; }
-  .terminal pre { font-size: 13.5px; line-height: 1.45; color: var(--muted); }
-  .terminal .acc { color: var(--accent-bright, #6fae85); }
-  .terminal .w { color: #d9a441; }
-  .terminal .fg { color: #e7ece8; }
-  .terminal .dim { color: #738078; }
+  .installcard { background: var(--ink-2); border: 1px solid var(--line); margin-top: 36px; }
+  .installcard .bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); color: var(--faint); font-size: 13px; }
+  .installcard pre { border: 0; margin: 0; padding: 20px; }
+  pre { background: var(--ink-2); border: 1px solid var(--line); padding: 20px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; color: var(--cream); margin-top: 24px; }
+  pre .c { color: var(--faint); } /* comments */
+  pre .p { color: var(--orange); } /* prompt */
+  pre .o { color: var(--ok); } /* success */
+  code { background: rgba(248,240,224,0.07); padding: 2px 6px; font-size: 13px; color: var(--cream); }
 
-  /* grid */
-  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 40px; }
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  .card { border: 1px solid rgba(231,236,232,0.1); padding: 22px; background: rgba(255,255,255,0.015); }
-  .card h3 { font-size: 15px; font-weight: 500; margin-bottom: 8px; color: #f0f3ef; }
-  .card p { color: var(--muted); font-size: 14px; }
-  .card .tag { color: var(--faint); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; display: block; margin-bottom: 10px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 32px; }
+  .card { border: 1px solid var(--line); padding: 20px 22px; background: rgba(248,240,224,0.02); }
+  .card h3 { font-size: 15px; font-weight: 500; margin-bottom: 8px; color: var(--cream); }
+  .card p { color: var(--cream-dim); font-size: 14px; }
+  .card .why { color: var(--faint); font-size: 13px; margin-top: 10px; }
 
-  /* metric cards (isoquant's pricing/pricing-table move) */
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 40px; }
-  .stat { border: 1px solid rgba(231,236,232,0.1); padding: 22px; }
-  .stat .big { font-size: 32px; font-weight: 450; letter-spacing: -0.02em; color: #f0f3ef; font-family: "SF Mono", SFMono-Regular, Consolas, monospace; }
-  .stat .lbl { color: var(--faint); font-size: 13px; margin-top: 6px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 28px; font-size: 14px; }
+  th { text-align: left; color: var(--faint); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  td { padding: 11px 12px; border-bottom: 1px solid rgba(248,240,224,0.06); color: var(--cream-dim); vertical-align: top; }
+  td:first-child { color: var(--cream); white-space: nowrap; }
 
-  table { width: 100%; border-collapse: collapse; margin-top: 32px; font-size: 14px; }
-  th { text-align: left; color: var(--faint); font-weight: 500; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; padding: 10px 12px; border-bottom: 1px solid rgba(231,236,232,0.12); }
-  td { padding: 12px; border-bottom: 1px solid rgba(231,236,232,0.06); color: var(--muted); }
-  td:first-child { color: var(--fg); }
-  code { background: rgba(255,255,255,0.05); padding: 2px 6px; font-size: 13px; color: var(--paper); }
-  pre { background: var(--surface-2); border: 1px solid rgba(231,236,232,0.1); padding: 20px; overflow-x: auto; font-size: 13.5px; line-height: 1.5; color: var(--paper); margin-top: 24px; }
-
-  footer { border-top: 1px solid rgba(231,236,232,0.08); padding: 48px 0 64px; color: var(--faint); font-size: 13px; }
-  footer .cols { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-bottom: 40px; }
-  footer .cols span { display: block; color: var(--muted); margin-bottom: 10px; font-size: 13px; }
+  footer { border-top: 1px solid var(--line); padding: 44px 0 60px; color: var(--faint); font-size: 13px; }
+  footer .cols { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-bottom: 36px; }
+  footer .cols span { display: block; color: var(--cream-dim); margin-bottom: 10px; }
   footer a { color: var(--faint); display: block; margin-bottom: 6px; }
-  footer a:hover { color: var(--fg); }
-  .footerBrand { display: flex; align-items: center; gap: 10px; font-size: 15px; color: var(--fg); }
+  footer a:hover { color: var(--orange); }
+  .footerBrand { display: flex; align-items: center; gap: 10px; font-size: 15px; color: var(--cream); }
 
   @media (max-width: 760px) {
     nav.top { display: none; }
-    .grid3, .stats { grid-template-columns: 1fr; }
+    .grid2 { grid-template-columns: 1fr; }
     footer .cols { grid-template-columns: 1fr 1fr; }
-    .hero { padding: 80px 0 56px; }
+    .hero { padding: 64px 0 44px; }
   }
 </style>
 </head>
@@ -113,107 +94,134 @@
 
 <header>
   <div class="wrap headerInner">
-    <a class="brand" href="#top" aria-label="bandit home">
-      <svg viewBox="0 0 28 28" width="26" height="26" fill="none" aria-hidden="true"><rect x="2.5" y="2.5" width="23" height="23" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 5.5h17l-17 17Z" fill="currentColor"/></svg>
-      bandit
-    </a>
+    <a class="brand" href="#top"><img src="icon.png" alt=""> bandit</a>
     <nav class="top">
-      <a href="#loop">The loop</a>
-      <a href="#organs">Organs</a>
-      <a href="#visibility">Visibility</a>
-      <a href="#discipline">Discipline</a>
-      <a href="#docs">Docs</a>
+      <a href="#install">Install</a>
+      <a href="#why">Why</a>
+      <a href="#how">How it works</a>
+      <a href="#daily">Daily use</a>
+      <a href="#credits">Lineage</a>
     </nav>
     <a class="cta" href="https://github.com/wisbech/bandit">GitHub</a>
   </div>
 </header>
 
 <main>
-  <div class="wrap hero">
-    <p class="secLabel">The folder factory</p>
-    <h1>A dark factory where AI agents do the work, and every claim is backed by evidence.</h1>
-    <p class="lede">bandit runs Claude Code, opencode, Codex, pi — any harness — on one kanban board: cards, a mechanical verify gate, a consult thread that argues before it executes, and a confidence ledger that turns experience into established truth.</p>
+  <div class="wrap hero" id="top">
+    <h1>AI agents do the work.<br>The factory makes it <em>evidence</em>.</h1>
+    <p class="lede">bandit runs your existing coding agents — opencode, Claude Code, Codex, pi — on a kanban board with a mechanical verify gate, a consult thread that argues before it executes, and a ledger that remembers what actually worked.</p>
     <div class="heroCtas">
-      <a class="btn primary" href="https://github.com/wisbech/bandit#install">Install</a>
-      <a class="btn" href="https://github.com/wisbech/bandit/blob/main/docs/installation.md">Installation guide</a>
+      <a class="btn primary" href="#install">Install in five commands</a>
+      <a class="btn" href="https://github.com/wisbech/bandit">Source</a>
     </div>
   </div>
 
-  <section id="loop">
+  <section id="install">
     <div class="wrap">
-      <p class="num"><b>01 /</b> THE LOOP</p>
-      <h2>Consult first. Execute. Verify mechanically. Then decide.</h2>
-      <p class="lede">A bounded convergence dialogue per card: the critic argues the plan before execution tokens burn, the actor works, the gate re-runs the verification command itself, and the master routes on the full thread.</p>
-      <div class="terminal"><pre>
-<span class="fg">╔══ THE LOOP ═══════════════════════════════════════════════╗</span>
-  <span class="fg">board ─▶ master ══▶ actor ──▶ verify gate (mechanical)</span>
-   ▲            ║                        │
-   │      <span class="acc">consult thread</span>                │
-   │      ══▶ <span class="acc">critic</span> (peer, summonable) ─┤
-   │            ▼                        │
-   └──── <span class="w">grader seat</span> ────────────────────┘
-       verdict: pass/fail/uncertain · <span class="acc">gate decides done</span>
-<span class="fg">╚═══════════════════════════════════════════════════════════╝</span></pre></div>
-      <div class="stats">
-        <div class="stat"><div class="big">3</div><div class="lbl">consult points per card — plan, stagnation, routing</div></div>
-        <div class="stat"><div class="big">0</div><div class="lbl">conversations that can turn a red gate green</div></div>
-        <div class="stat"><div class="big">∞</div><div class="lbl">reconstructibility — events are the truth, folders are the state</div></div>
+      <p class="num"><b>01 /</b> INSTALL</p>
+      <h2>Five commands, one dependency.</h2>
+      <p class="lede">Bun is the only requirement. Your agents bring their own auth — bandit never sees or stores provider keys.</p>
+      <div class="installcard">
+        <div class="bar"><span>terminal</span><span>macOS / Linux</span></div>
+        <pre><span class="c"># 1. get bandit (Bun ≥ 1.4 is the only dependency)</span>
+git clone https://github.com/wisbech/bandit.git && cd bandit && bun install && bun run build
+sudo ln -sf <span class="p">$PWD</span>/bin/bandit.js /usr/local/bin/bandit
+
+<span class="c"># 2. turn your project into a factory</span>
+<span class="p">$</span> cd your-project && bandit init
+
+<span class="c"># 3. add a card (work = a card with acceptance criteria, not a chat)</span>
+<span class="p">$</span> bandit task "write a hello world module" <span class="o">--accept</span> "module prints HELLO_WORLD"
+
+<span class="c"># 4. run the factory (drains the board once; omit --once to watch forever)</span>
+<span class="p">$</span> bandit start --once
+
+<span class="c"># 5. prove it — nine health checks, exit 1 on failure</span>
+<span class="p">$</span> bandit doctor && bandit watch</pre>
+      </div>
+      <div class="grid2">
+        <div class="card"><h3>Local models, zero cloud tokens</h3><p>The default config drives opencode through ollama (<code>ollama/glm-5.3-flash:cloud</code>). The full loop — actor, gate, grader, consults — runs without a single API key.</p></div>
+        <div class="card"><h3>Or your existing subscriptions</h3><p>Point the transport at Claude Code or Codex via ACP profiles; they use their own logins. <code>bandit harnesses add</code> registers any Anthropic-protocol endpoint (LiteLLM, gateways, ollama).</p></div>
       </div>
     </div>
   </section>
 
-  <section id="organs">
+  <section id="why">
     <div class="wrap">
-      <p class="num"><b>02 /</b> ORGANS</p>
-      <h2>Measure, argue, decide — no organ holds two of those roles.</h2>
-      <p class="lede">The Goodhart boundary is structural: the machine that says done is never the machine that did the work, and the grader never joins the room it grades.</p>
-      <div class="grid3">
-        <div class="card"><span class="num">SEAT</span><h3>The classifier seat</h3><p>Grades criterion-by-criterion in one cheap call. Fixed prompt, no persona, track record in <code>.bandit/grading/</code>. Self-reported confidence is recorded as fiction whenever the gate disagrees — and the dossier flags it.</p></div>
-        <div class="card"><span class="num">PEER</span><h3>The critic — and the summoned voices</h3><p>Argues free text in the consult thread, ends with one DECISION line, and may summon a researcher or architect into the conversation. Spawned serfs register as children — the audit is a file, not a process leak.</p></div>
-        <div class="card"><span class="num">ROUTER</span><h3>The master</h3><p>Owns the conversation and the routing decision: retry, specialist, escalate. Consults the critic at plan time and on stagnation. Decides with the best argument in the room — the thread is the receipt.</p></div>
+      <p class="num"><b>02 /</b> WHY</p>
+      <h2>Agents are powerful and unmanaged.</h2>
+      <p class="lede">You babysit one session at a time, paste context by hand, and trust output nobody verified. bandit is the management layer: work becomes cards, claims become measurements, arguments become a record.</p>
+      <div class="grid2">
+        <div class="card"><h3>Cards instead of conversations</h3><p>Every task has acceptance criteria and a budget. Done means the criteria were demonstrated — not that the agent said so.</p><p class="why">Why: chat sessions lose the thread; cards are the thread.</p></div>
+        <div class="card"><h3>The gate doesn't negotiate</h3><p>The harness re-runs the actor's reported verification command and uses the <em>actual</em> exit code. Self-graded success is recorded as fiction when the gate disagrees.</p><p class="why">Why: agents report exit code 0 optimistically; the machine that says done must not be the machine that did the work.</p></div>
+        <div class="card"><h3>Arguments before tokens</h3><p>Non-trivial cards get a consult: the critic argues the plan, the master decides, bad plans die before execution. Stuck cards get a "same wall or different wall?" conversation instead of a blind retry.</p><p class="why">Why: the cheapest failure is one that never spent the compute.</p></div>
+        <div class="card"><h3>A memory with provenance</h3><p>The confidence ledger tracks which levers moved which measures, corroborated by independent evidence. Established means posterior probability — not vibes, not folklore.</p><p class="why">Why: "it worked last time" is not a number.</p></div>
       </div>
     </div>
   </section>
 
-  <section id="visibility">
+  <section id="how">
     <div class="wrap">
-      <p class="num"><b>03 /</b> VISIBILITY</p>
-      <h2>Walk the factory the way the loop does.</h2>
-      <p class="lede">One command per altitude. All projection over files — no client holds state, no viewer can corrupt the factory.</p>
-      <div class="grid3">
-        <div class="card"><span class="num">WAVE</span><h3><code>bandit watch</code></h3><p>A live wave view that subscribes to the event stream — stage, role, gate per in-flight card, the last consult exchange with summoned voices in magenta. Renders on append; never polls.</p></div>
-        <div class="card"><span class="num">DOSSIER</span><h3><code>bandit card &lt;id&gt;</code></h3><p>What happened to this card: timeline, consult thread as a chat, per-round grading with contradictions flagged, artifacts with sizes. Every section cites its file.</p></div>
-        <div class="card"><span class="num">PROOF</span><h3><code>bandit doctor</code></h3><p>Nine-point health check, exit 1 on failure — CI-safe. The factory on itself found and fixed three of its own defects while the dossier narrated every round.</p></div>
+      <p class="num"><b>03 /</b> HOW IT WORKS</p>
+      <h2>Three organs, one boundary.</h2>
+      <p class="lede">Measure, argue, decide — held by different organs so none can grade its own homework.</p>
+      <table>
+        <tr><th>Organ</th><th>Role</th><th>Hard rule</th></tr>
+        <tr><td>Grader seat</td><td>One cheap call, criterion-by-criterion. Track record in <code>.bandit/grading/</code>.</td><td>Never joins the room it grades; can't touch the gate.</td></tr>
+        <tr><td>Critic (peer)</td><td>Argues free text in the consult thread at plan time, on stagnation, and at routing. Ends with one <code>DECISION:</code> line.</td><td>Read-only. May <code>SUMMON:</code> a researcher or architect — spawned as a real child serf, audit in the registry.</td></tr>
+        <tr><td>Master</td><td>Owns the conversation and routing: retry, specialist, escalate.</td><td>Decides with the thread in front of it; the thread is the receipt.</td></tr>
+        <tr><td>The gate</td><td>Re-executes the actor's verification command; fingerprints repeated failures.</td><td>Outside every conversation. <strong>No consult turns a red gate green.</strong></td></tr>
+      </table>
+      <pre><span class="c"># the consult thread is part of the deliverable — read the argument:</span>
+<span class="p">$</span> bandit card 010-replay-harness
+<span class="o">  01 / TIMELINE</span>   card.created → round 1 → gate red → grader contradiction ⚠
+<span class="o">  02 / CONSULT</span>    master> …   critic> … DECISION: amend
+<span class="o">  03 / GRADER</span>     round 1: fail (0.9) → round 2: pass (0.82)
+<span class="o">  04 / ARTIFACTS</span>  outputs/ 14 files · gates.json · verification-output.log</pre>
+    </div>
+  </section>
+
+  <section id="daily">
+    <div class="wrap">
+      <p class="num"><b>04 /</b> DAILY USE</p>
+      <h2>The commands you'll actually type.</h2>
+      <table>
+        <tr><th>Command</th><th>What it does</th><th>When</th></tr>
+        <tr><td><code>bandit watch</code></td><td>Live wave view — subscribes to the event stream, renders on append. Stage/role/gate per card, consult exchanges live, summoned voices in magenta.</td><td>Always, in a second terminal</td></tr>
+        <tr><td><code>bandit card &lt;id&gt;</code></td><td>The dossier: what happened and why — timeline, consult, verdicts, artifacts.</td><td>When anything surprises you</td></tr>
+        <tr><td><code>bandit serf &lt;name&gt; --role researcher</code></td><td>Spawn a serf by hand (mission, card binding). Loop-spawned specialists land in the same registry — hand-spawns are first-class crew.</td><td>When the factory lacks a voice</td></tr>
+        <tr><td><code>bandit chat master</code></td><td>Walk into the master's pane and talk. Panes are telemetry; the master is the conversation.</td><td>When you want to steer, not watch</td></tr>
+        <tr><td><code>bandit events</code></td><td>The append-only truth. Everything above is a projection of this.</td><td>Forensics</td></tr>
+        <tr><td><code>bandit doctor</code></td><td>Board, events, serfs, transport, binary, lock, decisions port, budgets, event flow.</td><td>After any config change; in CI</td></tr>
+      </table>
+      <div class="grid2" style="margin-top:28px">
+        <div class="card"><h3>The factory improves itself — with evidence gates</h3><p>After the board drains, the refiner reads failure signatures from the event log and proposes edits to serf prompts and memory — snapshot first, reversible via <code>bandit refine --rollback</code>. A factory that can't audit itself isn't running.</p></div>
+        <div class="card"><h3>It ran on itself first</h3><p>bandit's own board processed the features you're reading about. In production it found and fixed three of its own defects (a dead-end amend route, a false-red backtick bug, a blind stall-killer) — flagged a grading blind spot for a human, and the dossier narrated every round.</p></div>
       </div>
     </div>
   </section>
 
-  <section id="discipline">
+  <section id="credits">
     <div class="wrap">
-      <p class="num"><b>04 /</b> DISCIPLINE</p>
-      <h2>No new mechanism without a measured trigger.</h2>
-      <p class="lede">The KISS ledger is the factory's regularization: what is kept (each row earned by a real failure), what is frozen (with the exact production trigger that thaws it), what is forbidden (self-grading loopholes, by construction). Overfitting is the failure mode <em>before</em> floor-creep — this is the harness that doesn't fit itself to anecdotes.</p>
-      <pre>
-<span class="dim">kept</span>     event sourcing · budget caps · the mechanical gate · the consult thread
-<span class="acc">frozen</span>   TD prediction · forests · multi-voice debate — each behind a measured trigger
-<span class="w">forbidden</span>  learned floors · the grader in the room it grades · conversation over the gate</pre>
-    </div>
-  </section>
-
-  <section id="docs">
-    <div class="wrap">
-      <p class="num"><b>05 /</b> START</p>
-      <h2>Keep your agents. Change the factory.</h2>
-      <p class="lede">bandit wraps whatever harness answers the prompt. Local ollama, zero cloud tokens — or your existing Claude/opencode/Codex login.</p>
-      <pre>
-<span class="dim">$</span> git clone https://github.com/wisbech/bandit.git && cd bandit && bun install && bun run build
-<span class="dim">$</span> cd your-project
-<span class="dim">$</span> bandit init
-<span class="dim">$</span> bandit task "write a hello world module" --accept "module prints HELLO_WORLD"
-<span class="dim">$</span> bandit start --once
-<span class="dim">$</span> bandit doctor   <span class="dim"># 9 checks — healthy</span>
-<span class="dim">$</span> bandit watch    <span class="dim"># walk the floor</span></pre>
-      <p style="margin-top:32px"><a class="btn primary" href="https://github.com/wisbech/bandit/blob/main/docs/installation.md">Full installation guide</a> <a class="btn" href="https://github.com/wisbech/bandit">Source on GitHub</a></p>
+      <p class="num"><b>05 /</b> LINEAGE</p>
+      <h2>What bandit steals from, and gives back.</h2>
+      <p class="lede">bandit is third-generation: two prior serf harnesses ran in daily production for years before it. The rest is cited appropriation — read the research, take the mechanism, name the source.</p>
+      <table>
+        <tr><th>Source</th><th>What was taken</th><th>What bandit adds</th></tr>
+        <tr><td><a href="https://github.com/code-yeongyu/oh-my-openagent">OmO</a> <span style="color:var(--faint)">(senpi/pi)</span></td><td>Monitors-not-polling, the wave layout, kibitzer pattern (frozen until measured)</td><td>The factory layer OmO doesn't have: cards, gate, ledger, tree</td></tr>
+        <tr><td><a href="https://github.com/bytedance/deer-flow">DeerFlow</a> / <a href="https://github.com/deer-flow/llm-space">LLM Space</a></td><td>"Sub-agents are an optimization, not the default" · inspect-every-step, replay, files-are-the-state</td><td>Events-as-truth with replay repair; the dossier is the reader LLM Space builds a whole app for</td></tr>
+        <tr><td><a href="https://github.com/spinabot/brigade">Brigade</a></td><td>Thin-clients-over-state, room streaming shape, guard vocabulary (leases, budgets, "never the agent judging itself")</td><td>Files are the broadcast — fs.watch is the subscription, no gateway daemon</td></tr>
+        <tr><td><a href="https://arxiv.org/abs/2310.09144">Karwowski et al. 2023</a> · <a href="https://arxiv.org/abs/2407.14503">Kwa et al. 2024</a></td><td>Goodhart divergence thresholds; why capping + monitoring beats KL regularization</td><td>The divergence monitor + reward capping design in <a href="https://github.com/wisbech/bandit/blob/main/docs/plans/long-running-harness-design.md">the governor spec</a></td></tr>
+        <tr><td><a href="https://aclanthology.org/2025.findings-acl.114/">CARMO 2025</a> · <a href="https://aclanthology.org/2020.emnlp-main.625/">DORB 2020</a></td><td>Dynamic criteria generation; meta-bandit over which metric to optimize</td><td>Criterion retirement flow — generator (critic+refiner) kept structurally independent of the policy</td></tr>
+        <tr><td><a href="https://proceedings.mlr.press/v51/feraud16.html">Féraud et al. 2016</a> · <a href="https://arxiv.org/abs/1708.05655">Tekin & Turgay 2018</a></td><td>Bandit Forests for contextual reward surfaces; dominant-objective (floors-as-feasibility) framing</td><td>Floors are never learnable by the optimizing organ — the self-grading loophole, closed by construction</td></tr>
+        <tr><td><a href="https://arxiv.org/abs/2406.12845">ArmoRM 2024</a> · <a href="https://russell.inso.man.ac.uk/downloads/rl/q-decomposition.pdf">Q-decomposition 2003</a></td><td>MoE gating over per-objective scores; per-criterion learners with union semantics</td><td>Lexicographic composition (floors veto → primary ranks → Pareto) as the frozen upgrade path</td></tr>
+        <tr><td><a href="https://isoquant.ai">isoquant.ai</a> (design)</td><td>The visual language: near-black surface, one accent, numbered sections, hairlines, measured weight</td><td>The same tokens mapped to ANSI for the terminal renders (<a href="https://github.com/wisbech/bandit/blob/main/docs/style-guide.md">style guide</a>) — and bandit's own logo + palette</td></tr>
+        <tr><td>SoL-Pi · Holland's bucket brigade · XCS</td><td>Observation packs, evidence receipts; credit assignment; accuracy-based fitness</td><td>All documented in <a href="https://github.com/wisbech/bandit/blob/main/docs/appropriations.md">appropriations.md</a> with citations</td></tr>
+      </table>
+      <div class="grid2" style="margin-top:28px">
+        <div class="card"><h3>Compatibility</h3><p>bandit drives opencode — OmO's host — as its default harness: run <code>omo</code> inside a bandit actor's workspace and the skills/kibitzer stack rides along. brigade gateways, herdr panes, and ACP adapters all attach as profiles. Complements, not competitors: <strong>OmO is a better agent; bandit is the factory that can tell you why it believes something.</strong></p></div>
+        <div class="card"><h3>Privacy</h3><p>No telemetry, no accounts, no network calls of its own. Everything lives under your project's <code>.bandit/</code>; <code>rm -rf .bandit</code> deletes the factory cleanly. Your harnesses' provider traffic is between you and them.</p></div>
+      </div>
     </div>
   </section>
 </main>
@@ -221,10 +229,10 @@
 <footer>
   <div class="wrap">
     <div class="cols">
-      <div><span class="footerBrand"><svg viewBox="0 0 28 28" width="20" height="20" fill="none" aria-hidden="true"><rect x="2.5" y="2.5" width="23" height="23" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 5.5h17l-17 17Z" fill="currentColor"/></svg> bandit</span></div>
+      <div><span class="footerBrand"><img src="icon.png" alt="" style="width:20px;height:20px;border-radius:4px;"> bandit</span><p style="margin-top:10px">The agent factory.<br>MIT license.</p></div>
       <div><span>Docs</span><a href="https://github.com/wisbech/bandit/blob/main/docs/architecture.md">Architecture</a><a href="https://github.com/wisbech/bandit/blob/main/docs/cli.md">CLI reference</a><a href="https://github.com/wisbech/bandit/blob/main/docs/harnesses.md">Harnesses</a></div>
       <div><span>Design</span><a href="https://github.com/wisbech/bandit/blob/main/docs/plans/kiss-discipline.md">KISS discipline</a><a href="https://github.com/wisbech/bandit/blob/main/docs/style-guide.md">Style guide</a><a href="https://github.com/wisbech/bandit/blob/main/docs/plans/summoned-voices-plan.md">Summoned voices</a></div>
-      <div><span>Trust</span><a href="https://github.com/wisbech/bandit/blob/main/docs/installation.md">Installation</a><a href="https://github.com/wisbech/bandit/blob/main/docs/appropriations.md">Appropriations</a><a>MIT license</a></div>
+      <div><span>Lineage</span><a href="https://github.com/wisbech/bandit/blob/main/docs/appropriations.md">Appropriations</a><a href="https://github.com/wisbech/bandit/blob/main/docs/installation.md">Installation</a><a href="https://github.com/code-yeongyu/oh-my-openagent">OmO ↗</a><a href="https://github.com/spinabot/brigade">Brigade ↗</a></div>
     </div>
     <p>© 2026 bandit — MIT. A serf is a folder. A card is a folder. Events are the truth.</p>
   </div>
