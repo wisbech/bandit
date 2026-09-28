@@ -164,7 +164,7 @@ export function lastConsultTurns(cardDir: string): ConsultTurnView[] {
   const turns: ConsultTurnView[] = [];
   // Summoned voices write `**<role>:**` turns too (loop.ts summonConsultVoice)
   // — they are thread voices; render them with the same cell treatment.
-  const parts = raw.split(/\*\*([a-z][a-z0-9 _-]{0,32}):\*\*/i);
+  const parts = raw.split(/\*\*(master|critic|actor|researcher|architect|[a-z][a-z0-9-]*(?:-[a-z0-9]+)*-consult-[a-z0-9]+):\*\*/i);
   for (let i = 1; i < parts.length; i += 2) {
     const by = parts[i].trim().toLowerCase();
     const text = (parts[i + 1] ?? "").trim();
@@ -172,6 +172,16 @@ export function lastConsultTurns(cardDir: string): ConsultTurnView[] {
     turns.push({ by, text: text.slice(-400) });
   }
   return turns.slice(-2); // the last exchange (however many voices it took)
+}
+
+// Section headers: numbered (isoquant's "01 /" pattern), hairline always the
+// same total length. The tokens live in docs/style-guide.md §2.
+let sectionNo = 0;
+function sectionHeader(title: string): string {
+  sectionNo += 1;
+  const label = String(sectionNo).padStart(2, "0") + " / " + title.toUpperCase();
+  const line = "─".repeat(Math.max(4, 50 - label.length));
+  return color("1;37", `${label} ${line}`);
 }
 
 function trimCell(s: string, width: number): string {
@@ -262,7 +272,8 @@ export function renderWatch(tail?: EventTail): string {
   lines.push(color("1;36", "╔══ BANDIT LIVE ═══════════════════════════════════════╗"));
 
   // Agents (from the process table — the real workers)
-  lines.push(color("1;37", "── AGENTS (headless processes) ──────────────────────"));
+  sectionNo = 0;
+  lines.push(sectionHeader("agents"));
   const agents = runningAgents();
   if (agents.length === 0) {
     lines.push("  (no agents running — the loop is idle)");
@@ -275,14 +286,14 @@ export function renderWatch(tail?: EventTail): string {
   // THE WAVE: rows per column, stage/role/gate per in-flight card, last
   // consult exchange under each in-flight card that has one.
   lines.push("");
-  lines.push(color("1;37", "── WAVE (stage/role/gate per in-flight card) ────────"));
+  lines.push(sectionHeader("wave"));
   const events = tail ? tail.events : [];
   const rows = waveRows(events);
   if (rows.length === 0) lines.push("  (board empty)");
   else lines.push(...rows);
 
   lines.push("");
-  lines.push(color("1;37", "── BOARD ────────────────────────────────────────────"));
+  lines.push(sectionHeader("board"));
   const counts: Record<string, number> = {};
   for (const col of COLUMNS) {
     try { counts[col] = readdirSync(dir("board", col)).length; } catch { counts[col] = 0; }
@@ -291,7 +302,7 @@ export function renderWatch(tail?: EventTail): string {
 
   // EVENTS (truth) — the tail's recent window (incremental, not a rescan)
   lines.push("");
-  lines.push(color("1;37", "── EVENTS (truth) ──────────────────────────────────"));
+  lines.push(sectionHeader("events · the truth"));
   const recent = (tail ? tail.events : []).slice(-12);
   if (recent.length === 0) lines.push("  (no events yet)");
   for (const e of recent) {
