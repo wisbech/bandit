@@ -26,6 +26,8 @@
   body { background: var(--ink); color: var(--cream); font-family: -apple-system, "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
   code, pre, .mono { font-family: "SF Mono", SFMono-Regular, Consolas, "Liberation Mono", monospace; }
   a { color: var(--cream); text-decoration: none; }
+  td a, .card a, p a { color: var(--cream-dim); border-bottom: 1px solid rgba(248,152,0,0.35); }
+  td a:hover, .card a:hover, p a:hover { color: var(--orange); border-bottom-color: var(--orange); }
   a:hover { color: #fff; }
   .wrap { max-width: 1020px; margin: 0 auto; padding: 0 24px; }
 
@@ -172,7 +174,7 @@ https://raw.githubusercontent.com/wisbech/bandit/main/docs/installation.md
         <div class="card"><h3>Cards instead of conversations</h3><p>Every task has acceptance criteria and a budget. Done means the criteria were demonstrated — not that the agent said so.</p><p class="why">Why: chat sessions lose the thread; cards are the thread.</p></div>
         <div class="card"><h3>The gate doesn't negotiate</h3><p>The harness re-runs the actor's reported verification command and uses the <em>actual</em> exit code. Self-graded success is recorded as fiction when the gate disagrees.</p><p class="why">Why: agents report exit code 0 optimistically; the machine that says done must not be the machine that did the work.</p></div>
         <div class="card"><h3>Arguments before tokens</h3><p>Non-trivial cards get a consult: the critic argues the plan, the master decides, bad plans die before execution. Stuck cards get a "same wall or different wall?" conversation instead of a blind retry.</p><p class="why">Why: the cheapest failure is one that never spent the compute.</p></div>
-        <div class="card"><h3>A memory with provenance</h3><p>The confidence ledger tracks which levers moved which measures, corroborated by independent evidence. Established means posterior probability — not vibes, not folklore.</p><p class="why">Why: "it worked last time" is not a number.</p></div>
+        <div class="card"><h3>A memory with provenance</h3><p>The confidence ledger tracks which levers moved which measures, corroborated by independent evidence — Holland's <a href="https://doi.org/10.1016/B978-1-4832-1443-5.50022-X">bucket brigade</a> running as credit assignment. Established means posterior probability (<a href="https://en.wikipedia.org/wiki/Thompson_sampling">Thompson sampling</a> when instruments converge) — not vibes, not folklore.</p><p class="why">Why: "it worked last time" is not a number.</p></div>
       </div>
     </div>
   </section>
@@ -181,7 +183,7 @@ https://raw.githubusercontent.com/wisbech/bandit/main/docs/installation.md
     <div class="wrap">
       <p class="num"><b>03 /</b> HOW IT WORKS</p>
       <h2>Three organs, one boundary.</h2>
-      <p class="lede">Measure, argue, decide — held by different organs so none can grade its own homework.</p>
+      <p class="lede">Measure, argue, decide — held by different organs so none can grade its own homework. The boundary exists because of <a href="https://arxiv.org/abs/2310.09144">Goodhart's law in RL</a>: optimization pressure corrupts whatever it can reshape.</p>
       <table>
         <tr><th>Organ</th><th>Role</th><th>Hard rule</th></tr>
         <tr><td>Grader seat</td><td>One cheap call, criterion-by-criterion. Track record in <code>.bandit/grading/</code>.</td><td>Never joins the room it grades; can't touch the gate.</td></tr>
@@ -235,6 +237,21 @@ https://raw.githubusercontent.com/wisbech/bandit/main/docs/installation.md
         <tr><td><a href="https://isoquant.ai">isoquant.ai</a> (design)</td><td>The visual language: near-black surface, one accent, numbered sections, hairlines, measured weight</td><td>The same tokens mapped to ANSI for the terminal renders (<a href="https://github.com/wisbech/bandit/blob/main/docs/style-guide.md">style guide</a>) — and bandit's own logo + palette</td></tr>
         <tr><td>SoL-Pi · Holland's bucket brigade · XCS</td><td>Observation packs, evidence receipts; credit assignment; accuracy-based fitness</td><td>All documented in <a href="https://github.com/wisbech/bandit/blob/main/docs/appropriations.md">appropriations.md</a> with citations</td></tr>
       </table>
+      <p style="margin-top:28px;color:var(--faint);font-size:14px">Primary research — the papers behind the governor design (full annotated list in <a href="https://github.com/wisbech/bandit/blob/main/docs/plans/long-running-harness-design.md" style="color:var(--cream-dim)">the harness design doc</a>):</p>
+      <p style="margin-top:10px;font-size:14px;color:var(--cream-dim);line-height:2">
+        <a href="https://arxiv.org/abs/2310.09144" style="color:var(--orange)">Goodhart's Law in RL</a> (Karwowski et al., ICLR 2024) ·
+        <a href="https://arxiv.org/abs/2210.10760" style="color:var(--orange)">Scaling Laws for Reward Overoptimization</a> (Gao et al., ICML 2023) ·
+        <a href="https://arxiv.org/abs/2407.14503" style="color:var(--orange)">Catastrophic Goodhart</a> (Kwa et al. 2024) ·
+        <a href="https://aclanthology.org/2025.findings-acl.114/" style="color:var(--orange)">CARMO</a> (ACL 2025) ·
+        <a href="https://aclanthology.org/2020.emnlp-main.625/" style="color:var(--orange)">DORB</a> (EMNLP 2020) ·
+        <a href="https://arxiv.org/abs/2507.05619" style="color:var(--orange)">Evaluator Stress Tests</a> (ACL 2026) ·
+        <a href="https://proceedings.mlr.press/v51/feraud16.html" style="color:var(--orange)">Random Forests for Contextual Bandits</a> (AISTATS 2016) ·
+        <a href="https://arxiv.org/abs/1708.05655" style="color:var(--orange)">Dominant-Objective MO Bandits</a> (Tekin & Turgay, IEEE TSP 2018) ·
+        <a href="https://arxiv.org/abs/2406.12845" style="color:var(--orange)">ArmoRM</a> (EMNLP 2024) ·
+        <a href="https://russell.inso.man.ac.uk/downloads/rl/q-decomposition.pdf" style="color:var(--orange)">Q-decomposition</a> (Russell & Zimdars, ICML 2003) ·
+        <a href="https://doi.org/10.1109/ICNN.1995.488965" style="color:var(--orange)">XCS accuracy-based fitness</a> (Wilson 1995) ·
+        <a href="https://rail.eecs.berkeley.edu/eecs127-f21/hw/wk8-SuttonBarto.pdf" style="color:var(--orange)">Eligibility traces</a> (Sutton & Barto 2018, ch. 12)
+      </p>
       <div class="grid2" style="margin-top:28px">
         <div class="card"><h3>Compatibility</h3><p>bandit drives opencode — OmO's host — as its default harness: run <code>omo</code> inside a bandit actor's workspace and the skills/kibitzer stack rides along. brigade gateways, herdr panes, and ACP adapters all attach as profiles. Complements, not competitors: <strong>OmO is a better agent; bandit is the factory that can tell you why it believes something.</strong></p></div>
         <div class="card"><h3>Privacy</h3><p>No telemetry, no accounts, no network calls of its own. Everything lives under your project's <code>.bandit/</code>; <code>rm -rf .bandit</code> deletes the factory cleanly. Your harnesses' provider traffic is between you and them.</p></div>
