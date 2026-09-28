@@ -112,6 +112,7 @@
     <p class="lede">bandit runs your existing coding agents — opencode, Claude Code, Codex, pi — on a kanban board with a mechanical verify gate, a consult thread that argues before it executes, and a ledger that remembers what actually worked.</p>
     <div class="heroCtas">
       <a class="btn primary" href="#install">Install in five commands</a>
+      <a class="btn" href="#agent">Or let your agent do it</a>
       <a class="btn" href="https://github.com/wisbech/bandit">Source</a>
     </div>
   </div>
@@ -142,6 +143,22 @@ sudo ln -sf <span class="p">$PWD</span>/bin/bandit.js /usr/local/bin/bandit
       <div class="grid2">
         <div class="card"><h3>Local models, zero cloud tokens</h3><p>The default config drives opencode through ollama (<code>ollama/glm-5.3-flash:cloud</code>). The full loop — actor, gate, grader, consults — runs without a single API key.</p></div>
         <div class="card"><h3>Or your existing subscriptions</h3><p>Point the transport at Claude Code or Codex via ACP profiles; they use their own logins. <code>bandit harnesses add</code> registers any Anthropic-protocol endpoint (LiteLLM, gateways, ollama).</p></div>
+      </div>
+
+      <div class="installcard" id="agent" style="margin-top:14px">
+        <div class="bar"><span>for LLM agents — paste this into Claude Code, opencode, Codex, or any agent session</span><span>the agent reads the guide and walks every step</span></div>
+        <pre>Install and configure bandit by following the instructions here:
+https://raw.githubusercontent.com/wisbech/bandit/main/docs/installation.md
+
+<span class="c"># the guide's For-LLM-Agents section then walks the agent through:</span>
+<span class="c">#   step 0  ask you: local ollama, cloud harness, or verify an existing .bandit/</span>
+<span class="c">#   step 1  check prerequisites (bun, opencode, ollama reachability)</span>
+<span class="c">#   step 2  clone, build, put bin/ on PATH</span>
+<span class="c">#   step 3  bandit init + bandit doctor (exit 1 on any failed check — the agent</span>
+<span class="c">#           fixes the failing check's note and re-runs; every fix is idempotent)</span>
+<span class="c">#   step 4  write .bandit/config.json (transport, model, maxRetries)</span>
+<span class="c">#   step 5  seed a hello-world card, bandit start --once, read the dossier back</span>
+<span class="c">#   step 6  hand you the command list — board / card / watch / chat / events</span></pre>
       </div>
     </div>
   </section>
