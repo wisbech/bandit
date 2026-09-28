@@ -16,6 +16,12 @@ export function seedDefaultFolders(root: string): void {
     writeFileSync(join(root, ".bandit", "serfs", name, "serf.md"), `# ${name}\n`);
     writeFileSync(join(root, ".bandit", "serfs", name, "state.md"), "# State\n");
   }
+  writeFileSync(join(root, ".bandit", "serfs", "master", "prompt.md"), `You are master.
+
+CARD:
+{{card.task}}
+
+ROUTE: retry | specialist | escalate`);
   writeFileSync(join(root, ".bandit", "serfs", "actor", "prompt.md"), `You are actor.
 
 TASK: {{card.task}}
@@ -23,6 +29,8 @@ ACCEPTANCE:
 {{card.acceptance}}
 
 Report VERIFICATION_COMMAND, VERIFICATION_EXIT_CODE, VERIFICATION_OUTPUT.`);
+  // NOTE: no judge folder — grading runs on the classifier seat (GRADER_PROMPT
+  // constant in loop.ts). The critic keeps a prompt for legacy-shape tests.
   writeFileSync(join(root, ".bandit", "serfs", "critic", "prompt.md"), `Evaluate this output adversarially.
 
 ACTOR OUTPUT:

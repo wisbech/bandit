@@ -226,7 +226,7 @@ export function renderBandit(root: string): string {
 // ── CHILD REGISTRY (fractal spawning — v2 graph heritage) ──
 
 export interface ChildOrigin {
-  spawnedBy: string;
+  spawnedBy: string; // for summons: "summon:<parent>" — lineage shows both facts
   cardId?: string;
   problem: string;
   motivation: string;
@@ -239,6 +239,7 @@ export function registerChild(root: string, parent: string, childName: string, o
   // child folder gets its origin; parent's children/ gets the registry entry
   const childDir = join(root, ".bandit", "serfs", childName);
   mkdirSync(childDir, { recursive: true });
-  writeFileSync(join(childDir, "origin.md"), `spawned_by: ${origin.spawnedBy}\ncard: ${origin.cardId ?? ""}\ncreated: ${origin.createdAt}\n\n## Problem\n${origin.problem}\n\n## Parent motivation\n${origin.motivation}\n`);
-  writeFileSync(join(d, `${childName.replace("specialists/", "")}.md`), `# ${childName}\n\nspawned_by: ${origin.spawnedBy}\ncard: ${origin.cardId ?? ""}\nproblem: ${origin.problem}\n`);
+  const by = origin.spawnedBy ?? "unknown";
+  writeFileSync(join(childDir, "origin.md"), `spawned_by: ${by}\ncard: ${origin.cardId ?? ""}\ncreated: ${origin.createdAt}\n\n## Problem\n${origin.problem}\n\n## Parent motivation\n${origin.motivation}\n`);
+  writeFileSync(join(d, `${childName.split("/").pop()!}.md`), `# ${childName}\n\nspawned_by: ${by}\ncard: ${origin.cardId ?? ""}\nproblem: ${origin.problem}\n`);
 }

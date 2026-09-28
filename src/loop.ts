@@ -35,6 +35,36 @@ function ensureScaffold(): void {
   }
 }
 
+// ── THE ROLES: a classifier seat grades, the critic argues, the master decides ──
+// GRADING IS A FUNCTION, NOT A PERSONA (the deer-flow correction): when the
+// decisions port is configured it answers (graded, per-criterion — jev's
+// implementation); when not, ONE cheap LLM call through the fixed template
+// below, parsed by parseCriticVerdict. The seat has no serf folder and no
+// identity — its track record persists in .bandit/grading/<card>.md for the
+// refiner, calibration only. The critic is a full peer agent (consults);
+// the master owns routing and the conversation.
+
+// The classifier seat's prompt — a constant, not a template file. Grading is
+// a function; functions don't have identities.
+const GRADER_PROMPT = `Grade this output against the task's acceptance criteria, criterion by criterion.
+
+TASK:
+{{card.task}}
+
+OUTPUT:
+{{actor.output}}
+
+Answer with ONLY:
+VERDICT: pass | fail | uncertain
+CONFIDENCE: 0.0 to 1.0
+REASONING: <per-criterion evidence>`;
+
+function gradeDir(): string {
+  const gd = join(dir("grading"));
+  mkdirSync(gd, { recursive: true });
+  return gd;
+}
+
 // ── EVENTS (append-only truth) ──
 
 export function emit(type: string, payload: Record<string, unknown>): void {
@@ -130,14 +160,12 @@ export function parseCriticVerdict(text: string): CriticVerdict {
   };
 }
 
-// ObservationPack (SoL-Pi appropriation): big actor outputs become a stable
-// on-disk handle + bounded excerpt — exact content stays retrievable on
-// demand, we just stop inlining 50KB into the critic prompt.
+// The classifier seat: no serf folder, no identity render — one cheap call
+// from the fixed GRADER_PROMPT constant, parsed by parseCriticVerdict.
 async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string, maxRepairTurns = 2): Promise<{ verdict: CriticVerdict; verdictPath: string | null }> {
-  const criticDir = join(dir("serfs"), "critic");
-  const { packObservation } = await import("./runner");
+  const { packObservation, runTransport } = await import("./runner");
   const packed = packObservation(actorOutput, card.dir, "actor-output");
-  const prompt = readFileSync(join(criticDir, "prompt.md"), "utf-8")
+  const prompt = GRADER_PROMPT
     .replace(/\{\{card\.task\}\}/g, card.body.slice(0, 2000))
     .replace(/\{\{actor\.output\}\}/g, packed.text.slice(0, packed.archived ? 6000 : 3000));
 
@@ -145,15 +173,11 @@ async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string,
   let verdict: CriticVerdict | null = null;
   let repairHint = "";
 
-  // Repair loop: plumbing failures retry the CRITIC, never the actor.
+  // Repair loop: plumbing failures retry the SEAT, never the actor.
   for (let turn = 0; turn <= maxRepairTurns; turn++) {
-    const run = await runSerfOnCard({
-      serfDir: criticDir,
-      cardDir: card.dir,
-      transport: cfg.transport,
-      vars: { "actor.output": packed.text, repairHint },
-    });
-    text = run.run.output;
+    const out = join(gradeDir(), `${card.id}.seat-${Date.now().toString(36)}.md`);
+    const run = await runTransport(cfg.transport, prompt + repairHint, card.dir, out, 300_000);
+    text = run.output;
     verdict = parseCriticVerdict(text);
     if (!verdict.plumbing) break;
     // feed the specific failure back: "your last reply used the wrong format —
@@ -162,13 +186,247 @@ async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string,
     emit("critic.repair", { card: card.id, turn });
   }
 
-  const final = verdict ?? { verdict: "uncertain" as const, confidence: 0, reasoning: "critic plumbing after repairs", plumbing: true };
-  // Persist the verdict into the critic's folder (its track record).
-  const verdictsDir = join(criticDir, "outputs");
-  mkdirSync(verdictsDir, { recursive: true });
-  const verdictPath = join(verdictsDir, `${card.id}.md`);
+  const final = verdict ?? { verdict: "uncertain" as const, confidence: 0, reasoning: "grader plumbing after repairs", plumbing: true };
+  // Track record: calibration data for the refiner — .bandit/grading/.
+  const verdictPath = join(gradeDir(), `${card.id}.md`);
   writeFileSync(verdictPath, `VERDICT: ${final.verdict}\nCONFIDENCE: ${final.confidence}\nREASONING: ${final.reasoning}\n`);
   return { verdict: final, verdictPath };
+}
+
+// ── THE CONSULT THREAD (critic as the master's peer, present from problem-start) ──
+// One per-card transcript (card/consult.md), threaded, plain text — the way
+// the master↔addendum exchange actually worked. The master opens a consult at
+// measured points (plan, stagnation, no-convergence); the critic argues as a
+// peer; the master decides. Only the DECISION line is parseable — everything
+// else is conversation. The thread never touches the verify gate: no consult
+// turns a red gate green (the Goodhart boundary).
+
+interface ConsultTurn {
+  by: string; // "master" | "critic" | a summoned role's name
+  text: string;
+}
+
+interface ConsultDecision {
+  decision: "proceed" | "amend" | "reject" | "specialist" | "escalate" | null;
+  capability: string | null; // specialist:<capability> payload
+  summon: string | null;     // SUMMON: <role> — one domain voice into the thread
+}
+
+// One consult point per card, per trigger, by construction (convergeCard's
+// consultedStagnation flag + the plan/route call sites). Bounds live in the
+// callers, not in a counting scheme that can silently misread the transcript.
+const CONSULT_MAX_POINTS = 3; // per card (plan, stagnation, no-convergence)
+
+// Thread helpers: read the existing transcript, append a turn.
+function consultPath(cardDir: string): string {
+  return join(cardDir, "consult.md");
+}
+
+export function appendConsultTurn(cardDir: string, turn: ConsultTurn): void {
+  const p = consultPath(cardDir);
+  const header = existsSync(p) ? "" : "# Consult thread\n\n";
+  writeFileSync(p, header + `**${turn.by}:**\n\n${turn.text.trim()}\n\n`, { flag: "a" });
+}
+
+export function readConsultThread(cardDir: string): string {
+  const p = consultPath(cardDir);
+  return existsSync(p) ? readFileSync(p, "utf-8").slice(-8000) : "";
+}
+
+function parseConsultDecision(text: string): ConsultDecision["decision"] {
+  return text.match(/DECISION:\s*(proceed|amend|reject|specialist|escalate)/i)?.[1]?.toLowerCase() as ConsultDecision["decision"] ?? null;
+}
+
+// SUMMON: <role> — the master's move inside a consult: bring ONE domain voice
+// into the thread before deciding (researcher, architect, any role the project
+// defines). The summoned serf is spawned as a real child folder (audit), runs
+// one reply turn against the thread so far, and its argument joins consult.md
+// — the compounding mechanism of the duck.ai thread, mechanically. The voice
+// advises; it never touches the gate or grades anything.
+export function parseSummon(text: string): string | null {
+  return text.match(/SUMMON:\s*([A-Za-z][A-Za-z0-9 _-]{1,32})/i)?.[1]?.trim().split(/\s+/)[0] ?? null;
+}
+
+export async function summonConsultVoice(
+  cfg: LoopConfig,
+  cardDir: string,
+  cardId: string,
+  role: string,
+  summoner: string,
+  opening: string,
+): Promise<{ reply: string | null }> {
+  const roleDir = join(dir("serfs"), role);
+  const promptPath = join(roleDir, "prompt.md");
+  if (!existsSync(promptPath)) {
+    emit("consult.summon_failed", { card: cardId, role, reason: "no such serf prompt" });
+    return { reply: null };
+  }
+  // The spawn is the audit: a real child folder with origin + registry entry.
+  const { registerChild } = await import("./bandit");
+  const childName = role + "-consult-" + Date.now().toString(36).slice(-4);
+  registerChild(cfg.root, summoner, childName, {
+    spawnedBy: "summon:" + summoner,
+    cardId,
+    problem: "Summoned as consult voice: " + role,
+    motivation: "consult thread " + cardId,
+    createdAt: new Date().toISOString(),
+  });
+  emit("consult.summoned", { card: cardId, role, by: summoner, child: childName });
+  const childDir = join(dir("serfs"), childName);
+  mkdirSync(childDir, { recursive: true });
+  writeFileSync(join(childDir, "prompt.md"), readFileSync(promptPath, "utf-8"));
+  const voicePrompt =
+    `SUMMONED VOICE — you are ${role}, summoned by the ${summoner} into a consult thread. ` +
+    "You are an instrument, not a policy: answer as the domain expert. Cite sources; " +
+    "mark claims you cannot verify as unverified. Your argument joins the thread the " +
+    "master decides from — argue it well, then stand down.\n\n" + opening;
+  const out = join(cardDir, "outputs", `consult-${Date.now().toString(36)}-${role}.md`);
+  const reply = (await runSerfReply(cfg, childDir, out, voicePrompt)).output;
+  appendConsultTurn(cardDir, { by: role, text: reply });
+  emit("consult.turn", { card: cardId, by: role, bytes: reply.length });
+  return { reply };
+}
+
+// One consult exchange: master opens with context, critic answers as a peer.
+// The critic's reply is free text; the caller decides how to act on it.
+async function consultCritic(
+  cfg: LoopConfig,
+  cardDir: string,
+  cardId: string,
+  opening: string,
+): Promise<{ criticReply: string; turns: number }> {
+  const criticDir = join(dir("serfs"), "critic");
+  const outputsDir = join(cardDir, "outputs");
+  mkdirSync(outputsDir, { recursive: true });
+  // Master's opening turn is composed by the caller; recorded here.
+  const masterPrompt =
+    "CONSULT — you are the master's peer, present from the start of this problem. " +
+    "Argue hard when you disagree; concede when answered. The master decides — " +
+    "your job is that the decision is made with your best argument in the room.\n\n" +
+    opening;
+  const masterOut = join(outputsDir, `consult-${Date.now().toString(36)}-m.md`);
+  const criticReply = (await runSerfReply(cfg, criticDir, masterOut, masterPrompt)).output;
+  emit("consult.turn", { card: cardId, by: "critic", bytes: criticReply.length });
+  return { criticReply, turns: 1 };
+}
+
+// A reply turn is a prompt→output exchange, not a full gated run: the gate is
+// untouched by any consult (no conversation turns a red gate green), so the
+// reply path skips gate/self-verify and lands its artifact in the card.
+async function runSerfReply(cfg: LoopConfig, cwd: string, outputPath: string, prompt: string): Promise<{ output: string; tokensUsed: number }> {
+  const { runTransport } = await import("./runner");
+  const run = await runTransport(cfg.transport, prompt, cwd, outputPath, 300_000);
+  return { output: run.output, tokensUsed: run.tokensUsed };
+}
+
+// ── PLAN-PHASE CONSULT (critic as peer at problem-start — replaces plan.rejected) ──
+// The master shows the plan to the critic BEFORE execution tokens burn. The
+// critic answers free text; the master decides. A rejected plan is now a
+// conversation the master had, and the plan goes back amended — not just
+// rejected. The DECISION line is the only parseable artifact.
+
+async function consultOnPlan(cfg: LoopConfig, card: CardFolder, plan: string): Promise<{ proceed: boolean; feedback: string | null }> {
+  const cardDir = findCardDir(cfg.root, card.id) ?? card.dir;
+  emit("consult.opened", { card: card.id, thread: "plan" });
+  // An amend-routed card re-enters with a prior thread — the critic's earlier
+  // argument IS the plan feedback. Show it so the amended plan answers it
+  // instead of repeating the same gap (the muky62ac lesson: amend routed, the
+  // plan was regenerated identical, three rounds re-failed on the same wall).
+  const priorThread = readConsultThread(cardDir);
+  const opening =
+    "## consult: plan — " + new Date().toISOString() + "\n\n" +
+    "MASTER: The actor produced this plan. Argue it as a peer — what is wrong, what is missing, what will fail. " +
+    "The master decides; end your reply with one line DECISION: proceed | amend | reject and your reasoning.\n\n" +
+    (priorThread ? "PRIOR THREAD (a previous attempt was routed amend — the amended plan must answer these arguments):\n" + priorThread.slice(0, 3000) + "\n\n" : "") +
+    "CARD:\n" + card.body.slice(0, 1200) + "\n\nPLAN:\n" + plan.slice(0, 5000);
+  appendConsultTurn(cardDir, { by: "master", text: "The actor produced a plan for review. Argue it as a peer; end with DECISION: proceed | amend | reject.\n\nPLAN:\n" + plan.slice(0, 4000) });
+  const { criticReply } = await consultCritic(cfg, cardDir, card.id, opening);
+  appendConsultTurn(cardDir, { by: "critic", text: criticReply });
+  // SUMMON: the master may bring one domain voice before deciding — the
+  // compounding move (docs/plans/summoned-voices-plan.md). The summoned reply
+  // joins the thread; the master (loop) still owns the final proceed/amend.
+  const summon = parseSummon(criticReply);
+  if (summon) {
+    const { reply } = await summonConsultVoice(cfg, cardDir, card.id, summon, "critic", opening + "\n\nCRITIC'S ARGUMENT (why this voice is needed):\n" + criticReply.slice(0, 1500));
+    if (reply) {
+      // The voice's argument can change the decision only through the thread:
+      // the critic re-weighs with the researcher's reply in the room. One
+      // re-weigh turn, then the master decides on the whole thread.
+      const reweighPrompt =
+        "CONSULT (re-weigh) — the summoned voice has spoken. Re-read your decision " +
+        "with its argument in the room; concede or hold. End with DECISION: proceed | amend | reject.\n\n" +
+        "YOUR PRIOR DECISION:\n" + criticReply.slice(0, 1200) + "\n\nTHE SUMMONED VOICE:\n" + reply.slice(0, 3000);
+      const reweigh = (await runSerfReply(cfg, join(dir("serfs"), "critic"), join(cardDir, "outputs", `consult-${Date.now().toString(36)}-reweigh.md`), reweighPrompt)).output;
+      appendConsultTurn(cardDir, { by: "critic", text: reweigh });
+      emit("consult.reweighed", { card: card.id, thread: "plan", after: summon });
+      const final = parseConsultDecision(reweigh) ?? parseConsultDecision(criticReply);
+      emit("consult.decided", { card: card.id, thread: "plan", decision: final, summoned: summon });
+      if (final === "reject") return { proceed: false, feedback: reweigh };
+      if (final === "amend") return { proceed: true, feedback: "CRITIC-CONSULT (plan — apply before executing):\n" + reweigh };
+      return { proceed: true, feedback: null };
+    }
+  }
+  const decision = parseConsultDecision(criticReply);
+  emit("consult.decided", { card: card.id, thread: "plan", decision });
+  if (decision === "reject") return { proceed: false, feedback: criticReply };
+  if (decision === "amend") return { proceed: true, feedback: "CRITIC-CONSULT (plan — apply before executing):\n" + criticReply };
+  return { proceed: true, feedback: null };
+}
+
+// ── STAGNATION CONSULT (same wall or different wall? — replaces the regex specialist trigger) ──
+// Gate unchanged twice or the same missing capability cited twice: the master
+// consults mid-flight. The specialist spawn becomes one possible outcome of
+// the conversation, not a separate mechanism.
+
+async function consultOnStagnation(
+  cfg: LoopConfig,
+  card: CardFolder,
+  fingerprintRepeated: boolean,
+  missingCapability: string | null,
+  lastOutput: string,
+): Promise<{ spawnCapability: string | null; feedback: string | null }> {
+  const cardDir = findCardDir(cfg.root, card.id) ?? card.dir;
+  emit("consult.opened", { card: card.id, thread: "stagnation" });
+  const thread = readConsultThread(cardDir);
+  const opening =
+    "CONSULT (stagnation) — the card is stuck: " +
+    (fingerprintRepeated ? "the verification gate returned the SAME failing output twice. " : "") +
+    (missingCapability ? `The grader keeps citing the same missing capability: ${missingCapability}. ` : "") +
+    "Same wall or different wall? If the actor lacks a capability it cannot learn mid-card, say specialist: <capability>. " +
+    "If it is the same wall, say what unblocks it. End with one line DECISION: proceed | amend | specialist | escalate.\n\n" +
+    (thread ? "THREAD SO FAR:\n" + thread.slice(0, 3000) + "\n\n" : "") +
+    "CARD:\n" + card.body.slice(0, 1000) + "\n\nLAST OUTPUT:\n" + lastOutput.slice(0, 2500);
+  appendConsultTurn(cardDir, { by: "master", text: "STAGNATION: " + (fingerprintRepeated ? "gate fingerprint repeated. " : "") + "missing capability cited twice: " + (missingCapability ?? "unknown") + ". Same wall or different wall? End with DECISION: proceed | amend | specialist | escalate." });
+  const { criticReply } = await consultCritic(cfg, cardDir, card.id, opening);
+  appendConsultTurn(cardDir, { by: "critic", text: criticReply });
+  // SUMMON: on a persisted wall, the domain voice asks "wall or doorway?" —
+  // a conversation instead of the regex counter's guess.
+  const summon = parseSummon(criticReply);
+  if (summon) {
+    const { reply } = await summonConsultVoice(cfg, cardDir, card.id, summon, "critic", opening + "\n\nCRITIC'S ARGUMENT:\n" + criticReply.slice(0, 1200));
+    if (reply) {
+      const reweighPrompt =
+        "CONSULT (re-weigh) — the summoned voice has spoken. Same wall or different wall, now with its argument in the room? " +
+        "End with one line DECISION: proceed | amend | specialist | escalate.\n\n" +
+        "YOUR PRIOR DECISION:\n" + criticReply.slice(0, 1200) + "\n\nTHE SUMMONED VOICE:\n" + reply.slice(0, 3000);
+      const reweigh = (await runSerfReply(cfg, join(dir("serfs"), "critic"), join(cardDir, "outputs", `consult-${Date.now().toString(36)}-reweigh.md`), reweighPrompt)).output;
+      appendConsultTurn(cardDir, { by: "critic", text: reweigh });
+      emit("consult.reweighed", { card: card.id, thread: "stagnation", after: summon });
+      const final = parseConsultDecision(reweigh) ?? parseConsultDecision(criticReply);
+      const spawnCap2 = final === "specialist"
+        ? (reweigh.match(/specialist:\s*([A-Za-z0-9 _-]{2,60})/i)?.[1]?.trim() ?? missingCapability)
+        : null;
+      emit("consult.decided", { card: card.id, thread: "stagnation", decision: final, capability: spawnCap2, summoned: summon });
+      return { spawnCapability: spawnCap2, feedback: final === "amend" || final === "proceed" ? reweigh : null };
+    }
+  }
+  const decision = parseConsultDecision(criticReply);
+  const spawnCap = decision === "specialist"
+    ? (criticReply.match(/specialist:\s*([A-Za-z0-9 _-]{2,60})/i)?.[1]?.trim() ?? missingCapability)
+    : null;
+  const feedback = decision === "amend" || decision === "proceed" ? criticReply : null;
+  emit("consult.decided", { card: card.id, thread: "stagnation", decision, capability: spawnCap });
+  return { spawnCapability: spawnCap, feedback };
 }
 
 // ── PLAN PHASE (non-trivial pipelines produce plan.md inside the card) ──
@@ -176,14 +434,18 @@ async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string,
 async function runPlanPhase(cfg: LoopConfig, card: CardFolder, actorDir: string): Promise<void> {
   emit("plan.started", { card: card.id });
   const currentDir = findCardDir(cfg.root, card.id) ?? card.dir;
-  await runSerfOnCard({
+  const run = await runSerfOnCard({
     serfDir: actorDir,
     cardDir: currentDir,
     transport: cfg.transport,
-    vars: { planOnly: true, output: { path: join(currentDir, "plan.md") } },
-    // The actor's prompt template handles plan-only mode via the same runner;
-    // the output file is the plan.
+    vars: { planOnly: true },
   });
+  // The plan is the run's output, persisted by the loop — not a var the
+  // harness is told to write (vars can't express output paths; the placeholder
+  // would ship literally to the model). Empty output = transport red, no plan.
+  if (run.run.output.trim().length > 0) {
+    writeFileSync(join(currentDir, "plan.md"), run.run.output);
+  }
   emit("plan.finished", { card: card.id });
 }
 
@@ -239,6 +501,33 @@ export function repairBoardFromEvents(): { moved: number; repaired: string[] } {
   return { moved: moved.length, repaired };
 }
 
+// ── AMEND ROUTING (the loop re-opens its own review cards) ──
+// A master "amend" route used to rot in review: the loop only drains
+// in-progress + backlog, so the card waited for a human board move — the
+// exact manual fix the dogfood card exists to eliminate. The repair: amend
+// is a requeue, not a dead end. The card returns to backlog (the loop's own
+// frontier re-drains it next pass, no human in the path), the round ledger
+// travels in frontmatter, and reAmendCount bounds the cycle — two amend
+// requeues and the card stays in review for a human (an amend loop is not
+// convergence, it is a conversation pretending to converge).
+
+export const AMEND_REQUEUE_LIMIT = 2;
+
+export function amendRequeueCount(card: CardFolder): number {
+  return parseInt(card.frontmatter.amendRequeues ?? "0", 10);
+}
+
+function recordAmendRequeue(card: CardFolder): void {
+  const cardMd = join(card.dir, "card.md");
+  const raw = readFileSync(cardMd, "utf-8");
+  const next = amendRequeueCount(card) + 1;
+  if (/amendRequeues:/.test(raw)) {
+    writeFileSync(cardMd, raw.replace(/amendRequeues: \d+/, `amendRequeues: ${next}`));
+  } else {
+    writeFileSync(cardMd, raw.replace(/^---$/m, `---\namendRequeues: ${next}`));
+  }
+}
+
 // ── CONVERGENCE ROUNDS ──
 // Bounded actor-critic dialogue refereed by the lever. Each round: actor pull
 // → verify gate → critic eval → ledger update. Round 0 = plan critique before
@@ -260,24 +549,29 @@ async function convergeCard(
   card: CardFolder,
   maxRetries: number,
   kind: "trivial" | "standard" | "hard",
-): Promise<"converged" | "no-convergence"> {
+): Promise<"converged" | "no-convergence" | "requeued"> {
   const conf = await import("./confidence");
   const actorDir = join(dir("serfs"), "actor");
   const leverId = leverOf(card);
 
-  // Round 0: plan critique before expensive attempts (non-trivial pipelines).
+  // Round 0: plan consult before expensive attempts (non-trivial pipelines).
+  // The master shows the plan to the critic as a peer; the DECISION line
+  // governs. Reject → back to the author with the critic's argument attached;
+  // zero actor-execution tokens. Amend → the argument becomes plan feedback.
   if (kind !== "trivial") {
     await runPlanPhase(config, card, actorDir);
     const currentDir = findCardDir(config.root, card.id) ?? card.dir;
     const planPath = join(currentDir, "plan.md");
     if (existsSync(planPath)) {
       const plan = readFileSync(planPath, "utf-8");
-      const { verdict } = await runCritic(config, parseCard(currentDir), plan);
-      if (verdict.plumbing) {
-        emit("critic.bypass", { card: card.id, reason: "plan-critique plumbing" });
-      } else if (verdict.verdict === "fail" && verdict.confidence > 0.7) {
-        emit("plan.rejected", { card: card.id, reasoning: verdict.reasoning.slice(0, 100) });
-        return "no-convergence"; // back to author, zero actor-execution tokens
+      try {
+        const consult = await consultOnPlan(config, parseCard(currentDir), plan);
+        if (!consult.proceed) {
+          emit("plan.rejected", { card: card.id, via: "consult", reasoning: (consult.feedback ?? "").slice(0, 100) });
+          return "no-convergence"; // back to author, zero actor-execution tokens
+        }
+      } catch (e) {
+        emit("consult.failed", { card: card.id, thread: "plan", reason: String(e).slice(0, 120) });
       }
     }
   }
@@ -285,6 +579,7 @@ async function convergeCard(
   let lastFailedCapability: string | null = null;
   let consecutiveSameFailure = 0;
   let lastOutput = "";
+  let consultedStagnation = false; // one stagnation consult per card
   // Online Context Compact (SoL-Pi): bounded per-round history for digests.
   let roundHistory: { round: number; green: boolean; verdict: string; confidence: number; reasoning: string; command?: string }[] = [];
 
@@ -294,8 +589,6 @@ async function convergeCard(
     let feedback = round > 1
       ? "CONVERGENCE ROUND " + round + ". Previous rounds did not converge. Address the critic's issues with the lever in mind."
       : "";
-    const specialistDir = consecutiveSameFailure >= 2 ? lastFailedCapability : null;
-    void specialistDir;
     // ── Transport guard: 0-byte actor output is an immediate transport-red ──
     // (3rd {{actor.output}} failure mode, 2026-09-24: 90 empty run files).
     // An empty actor stdout means the transport failed — render a critic
@@ -304,6 +597,7 @@ async function convergeCard(
     // critic an empty/placeholder input.
     let run: Awaited<ReturnType<typeof runSerfOnCard>>["run"];
     let gate: Awaited<ReturnType<typeof runSerfOnCard>>["gate"];
+    let gateUnchanged = false;
     let selfVerify: Awaited<ReturnType<typeof runSerfOnCard>>["selfVerify"];
     let evidence: Awaited<ReturnType<typeof runSerfOnCard>>["evidence"];
     {
@@ -327,6 +621,7 @@ async function convergeCard(
       }
       if (attempt > 0) emit("transport.retried", { card: card.id, round, emptyAttempts: attempt, recovered: result !== null && result.run.output.trim().length > 0 });
       ({ run, gate, selfVerify, evidence } = result!);
+      gateUnchanged = result!.unchangedGate;
       if (run.output.trim().length === 0) {
         // transport red even after retries: skip the critic entirely, treat as red round
         emit("transport.red", { card: card.id, round, emptyAttempts: attempt + 1 });
@@ -379,6 +674,13 @@ async function convergeCard(
     if (verdict.plumbing) {
       emit("critic.bypass", { card: card.id, round, reason: "plumbing-unparseable after repair" });
     }
+    // Grader/gate contradiction: the seat passed while the gate was red.
+    // Never blocks convergence (the gate is the truth), but the event log
+    // records it — the seat's confidence is self-reported fiction until the
+    // calibration loop exists, and this is the flag the refiner reads.
+    if (!green && !verdict.plumbing && verdict.verdict === "pass") {
+      emit("grader.gate_contradiction", { card: card.id, round, graderConfidence: verdict.confidence });
+    }
 
     const converged = green && (verdict.plumbing || verdict.verdict !== "fail" || verdict.confidence <= 0.7);
     if (converged) {
@@ -395,6 +697,7 @@ async function convergeCard(
     );
     const capabilityMatch = triage.verdict.reasoning.match(/missing[:\s]+([A-Za-z0-9 _-]{4,60})/i);
     const missingCapability = capabilityMatch?.[1]?.trim() ?? null;
+
     // Failure-similarity through the decision port (graded when an evaluator
     // is configured; regex-only when not).
     let similarity: number | null = null;
@@ -416,6 +719,27 @@ async function convergeCard(
       lastFailedCapability = missingCapability;
     }
 
+    // Stagnation consult: gate unchanged or the same failure cited twice —
+    // the master talks to the critic mid-flight instead of firing the
+    // specialist regex. The spawn becomes one possible outcome of the
+    // conversation; the consult's verdict owns the signal.
+    let consultSpawn: string | null = null;
+    if (!consultedStagnation && round >= 2 && (gateUnchanged || consecutiveSameFailure >= 2)) {
+      consultedStagnation = true;
+      try {
+        const stuck = await consultOnStagnation(config, parseCard(currentCardDir), gateUnchanged, missingCapability, lastOutput);
+        if (stuck.spawnCapability) {
+          consultSpawn = stuck.spawnCapability;
+          lastFailedCapability = stuck.spawnCapability;
+        }
+        if (stuck.feedback) {
+          feedback = "CRITIC-CONSULT (stagnation — the unblocking argument):\n" + stuck.feedback;
+        }
+      } catch (e) {
+        emit("consult.failed", { card: card.id, thread: "stagnation", reason: String(e).slice(0, 120) });
+      }
+    }
+
     // Online Context Compact (SoL-Pi appropriation): later rounds get a
     // digest of prior rounds — verdicts, gate history, spend — not the full
     // transcript. Compaction happens exactly at a round boundary.
@@ -431,23 +755,79 @@ async function convergeCard(
       roundHistory.push({ round, green, verdict: verdict.verdict, confidence: verdict.confidence, reasoning: verdict.reasoning, command: gate.command });
     }
 
-    // Spawn trigger: same missing capability twice → spawn a specialist child
-    if (consecutiveSameFailure >= 2 && missingCapability) {
-      const specialistName = "specialist-" + slugify(missingCapability).slice(0, 24) + "-" + Date.now().toString(36).slice(-4);
+    // Spawn trigger: the stagnation consult said specialist (its capability
+    // payload), or — consult unavailable/plumbing — fall back to the regex
+    // counter so stagnation never passes silently.
+    const spawnCapability = consultSpawn ?? (consecutiveSameFailure >= 2 && !consultedStagnation ? missingCapability : null);
+    if (spawnCapability) {
+      const specialistName = "specialist-" + slugify(spawnCapability).slice(0, 24) + "-" + Date.now().toString(36).slice(-4);
       const { registerChild } = await import("./bandit");
       registerChild(config.root, "actor", "specialists/" + specialistName, {
         spawnedBy: "actor",
         cardId: card.id,
-        problem: "Two rounds failed on missing capability: " + missingCapability,
+        problem: "Stuck on missing capability: " + spawnCapability,
         motivation: leverOf(card) ?? "convergence rounds",
         createdAt: new Date().toISOString(),
       });
-      emit("specialist.spawned", { card: card.id, specialist: specialistName, capability: missingCapability });
+      emit("specialist.spawned", { card: card.id, specialist: specialistName, capability: spawnCapability });
       consecutiveSameFailure = 0;
     }
 
     // Ledger: round pulled, needle flat
     if (leverId) conf.weaken(config.root, leverId, "round " + round + ": flat — " + triage.verdict.reasoning.slice(0, 60));
+  }
+
+  // No-convergence: the routing decision continues the SAME thread — the
+  // master (not the critic) decides here, with the consult history in front
+  // of it. One master turn; the DECISION line governs specialist spawning.
+  // The card's folder may have been renamed since `card` was parsed — resolve
+  // its current directory before touching it.
+  try {
+    const currentDir = findCardDir(config.root, card.id) ?? card.dir;
+    const liveCard = parseCard(currentDir);
+    const thread = readConsultThread(currentDir);
+    const outputsDir = join(currentDir, "outputs");
+    mkdirSync(outputsDir, { recursive: true });
+    const masterOpening =
+      "CONSULT (routing) — the card failed all convergence rounds. You have the thread below: " +
+      "the critic's plan argument and, if it fired, the stagnation consult. Decide the route: " +
+      "retry with an amended plan, spawn a specialist, or escalate to a human. " +
+      "End with one line DECISION: proceed | amend | specialist | escalate.\n\n" +
+      (thread ? "THREAD SO FAR:\n" + thread.slice(0, 4000) + "\n\n" : "") +
+      "CARD:\n" + liveCard.body.slice(0, 1200) + "\n\nLAST GATE FAILURE:\n" + (lastFailedCapability ?? "none cited");
+    appendConsultTurn(currentDir, { by: "master", text: "ROUTING: card failed " + maxRetries + " rounds. Decide: retry / specialist / escalate. End with DECISION line." });
+    const masterOut = join(outputsDir, `consult-${Date.now().toString(36)}-route.md`);
+    const masterReply = (await runSerfReply(config, join(dir("serfs"), "master"), masterOut, masterOpening)).output;
+    appendConsultTurn(currentDir, { by: "master", text: masterReply });
+    const route = parseConsultDecision(masterReply);
+    emit("consult.routed", { card: card.id, decision: route });
+    if (route === "specialist") {
+      const capability = masterReply.match(/specialist:\s*([A-Za-z0-9 _-]{2,60})/i)?.[1]?.trim() ?? lastFailedCapability ?? "unknown";
+      const specialistName = "specialist-" + slugify(capability).slice(0, 24) + "-" + Date.now().toString(36).slice(-4);
+      const { registerChild } = await import("./bandit");
+      registerChild(config.root, "actor", "specialists/" + specialistName, {
+        spawnedBy: "master-consult",
+        cardId: card.id,
+        problem: "Master routed specialist after no-convergence: " + capability,
+        motivation: leverOf(card) ?? "master consult",
+        createdAt: new Date().toISOString(),
+      });
+      emit("specialist.spawned", { card: card.id, specialist: specialistName, capability, via: "master-consult" });
+    } else if (route === "amend") {
+      // Amend is a requeue, not a dead end (see AMEND ROUTING above).
+      const requeuedDir = findCardDir(config.root, card.id) ?? card.dir;
+      const requeuedCard = parseCard(requeuedDir);
+      if (amendRequeueCount(requeuedCard) >= AMEND_REQUEUE_LIMIT) {
+        emit("card.amend_limit", { card: card.id, requeues: amendRequeueCount(requeuedCard), limit: AMEND_REQUEUE_LIMIT });
+      } else {
+        recordAmendRequeue(requeuedCard);
+        moveCard(requeuedCard, "backlog");
+        emit("card.requeued", { card: card.id, to: "backlog", reason: "master route: amend", requeues: amendRequeueCount(requeuedCard) });
+        return "requeued";
+      }
+    }
+  } catch (e) {
+    emit("consult.failed", { card: card.id, thread: "route", reason: String(e).slice(0, 120) });
   }
 
   return "no-convergence";
@@ -498,6 +878,12 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
       moveCard(card, "done");
       emit("card.completed", { card: card.id });
       completed += 1;
+    } else if (result === "requeued") {
+      // The routing consult moved it to backlog already — it is the frontier
+      // of the next pass. Not a failure; not a completion.
+      const liveDir = findCardDir(config.root, card.id) ?? card.dir;
+      const liveCard = parseCard(liveDir);
+      if (liveCard.column !== "backlog") moveCard(liveCard, "backlog");
     } else {
       moveCard(card, "review");
       emit("task.failed", { card: card.id, reason: "no-convergence", attempts: maxRetries });

@@ -38,9 +38,12 @@ board ──▶ pick frontier card ──▶ pipeline ──▶ converge ──�
 │   │   ├── journal/      # append-only working notes
 │   │   ├── outputs/      # persisted run outputs
 │   │   ├── memory/       # lessons (written by the refiner, with evidence)
-│   │   └── children/     # registry of spawned specialists
-│   ├── critic/           # same shape — verdicts/ persist here: its track record
-│   └── master/
+│   │   └── children/     # registry of spawned specialists + summoned voices
+│   ├── critic/           # consult replies land here — the peer's track record
+│   ├── master/           # routing decisions on the consult thread
+│   ├── researcher/       # summonable — cites sources, marks unverified claims
+│   ├── architect/        # summonable — proposes shapes, names what NOT to build
+│   └── <hand-spawned>/   # bandit serf <name> — same folders, same registry
 ├── events/               # append-only JSONL — the truth
 └── goal/                 # confidence ledger + bandit posteriors
 ```
@@ -73,7 +76,7 @@ Acceptance criteria drive the gate; the `## Lever` section links the card to the
 
 The board is a *projection* over events. `repairBoardFromEvents()` replays the log and moves folders to where the last event says they belong — a crashed run, an accidentally moved card, or a corrupted projection repairs itself on replay. This is the event-sourcing discipline: state is derivable, truth is the log.
 
-Core event types: `card.created` `card.moved` `pipeline.selected` `plan.started` `plan.finished` `plan.rejected` `round.started` `verification.green` `verification.red` `critic.verdict` `critic.repair` `critic.bypass` `converged` `card.completed` `task.failed` `specialist.spawned` `card.budget_exhausted`.
+Core event types: `card.created` `card.moved` `pipeline.selected` `plan.started` `plan.finished` `plan.rejected` `round.started` `verification.green` `verification.red` `gate.selfverify` `critic.verdict` `critic.repair` `critic.bypass` `grader.gate_contradiction` `consult.opened` `consult.turn` `consult.decided` `consult.routed` `consult.summoned` `consult.reweighed` `consult.failed` `card.requeued` `card.amend_limit` `converged` `card.completed` `task.failed` `specialist.spawned` `serf.spawned` `card.budget_exhausted`.
 
 ## Pipelines
 
@@ -89,14 +92,15 @@ The plan critique is a cheap gate: the critic rejects bad plans *before* the act
 
 ## The critic
 
-The critic is a serf, not a stage. Its rules:
+The critic is a serf and the master's peer — present from problem-start, not after the failure. Grading is a separate classifier seat (one cheap call from a fixed prompt, track record in `.bandit/grading/`, never a persona). The critic's rules:
 
-1. **Verdicts persist** in `.bandit/serfs/critic/outputs/<card>.md` — a track record, inspectable and refiner-readable.
-2. **Plumbing failures retry the critic, never the actor.** An unparseable verdict is the critic's plumbing problem (up to 2 self-retries), then it's bypassed and documented — the card is never failed because the reviewer hiccuped.
-3. **On red, the critic triages:** fixable by skill/execution, or is the card missing a prerequisite? The answer routes the next round.
-4. **Same missing capability twice → spawn a specialist child serf** with lineage (`origin.md` records parent, card, problem, motivation).
+1. **It argues in consult threads, not one-way verdicts.** Three bounded consult points per card — plan (before execution tokens burn), stagnation (same wall or different wall?), and routing (the master's decision). The thread lives in `card/consult.md`; only the `DECISION:` line is parseable, everything else is conversation.
+2. **It may summon.** `SUMMON: <role>` inside a consult reply spawns a real child serf (origin + registry, src/bandit.ts) whose reply joins the thread — a researcher with sources, an architect with shapes. The voice advises; it never touches the gate, grades, or writes code.
+3. **Plumbing failures retry the seat, never the actor.** An unparseable grade is the seat's plumbing problem (up to 2 self-retries), then it's bypassed and documented — the card is never failed because the reviewer hiccuped.
+4. **Its verdicts are advisory; the gate is the truth.** A grader pass at a red gate is recorded as `grader.gate_contradiction` — the seat's confidence is self-reported fiction, flagged in the dossier.
+5. **Be convincable.** The summoned voices and the critic's own amendments (VERDICT-CHANGE on rebuttal) mean the loop's decisions are made with the best argument in the room — and the thread is the receipt.
 
-The converged condition is deliberately conservative: green verification AND (pass, or plumbing-bypass, or fail with confidence ≤ 0.7). A confident critic fail blocks convergence even on green — the actor goes another round.
+The converged condition is deliberately conservative: green verification AND (grading pass, or plumbing-bypass, or fail with confidence ≤ 0.7). A confident grading fail blocks convergence even on green — the actor goes another round. No consult, debate, or rebuttal can turn a red gate green: the Goodhart boundary.
 
 ## Confidence: ledger → bandit
 

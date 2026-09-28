@@ -7,15 +7,17 @@
 **The agent factory.** A dark factory where AI coding agents execute work on a kanban board, an adversarial critic enforces quality, and every claim is backed by verification evidence — not vibes.
 
 ```
-   ┌─────────────────────────────────────────────────┐
-   │                    THE LOOP                     │
-   │                                                 │
-   │   board ──▶ master ──▶ actor ──▶ verify gate    │
-   │    ▲                                   │        │
-   │    │                                   ▼        │
-   │    └────────────────────────── critic ◀────────┘
-   │         verdict: pass / fail / bypass           │
-   └─────────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────────┐
+   │                       THE LOOP                           │
+   │                                                          │
+   │   board ─▶ master ══▶ actor ──▶ verify gate (mechanical) │
+   │    ▲            ║                        │               │
+   │    │      consult thread                 ▼               │
+   │    │      ══▶ critic (peer, summonable) ─┤               │
+   │    │            ▼                        │               │
+   │    └──── grader seat ────────────────────┘               │
+   │        verdict: pass/fail/uncertain · gate decides done  │
+   └──────────────────────────────────────────────────────────┘
 ```
 
 > **A serf is a folder. A card is a folder. Events are the truth. Harnesses are adapters.**
@@ -30,7 +32,7 @@ Agent harnesses are powerful but unmanaged. You babysit one session at a time, p
 
 - **Cards instead of conversations.** Work is a kanban card with acceptance criteria, not a chat transcript.
 - **Verification instead of vibes.** Every actor must report a `VERIFICATION_COMMAND` and its exit code. Green or it didn't happen.
-- **A critic with teeth.** A second adversarial agent evaluates every result against the card. Plumbing failures retry the *critic*, never the actor.
+- **A critic with teeth — and a voice.** A classifier seat grades every result against the card; a peer critic argues in a threaded consult at plan time, on stagnation, and at routing — and can summon researchers into the conversation. Plumbing failures retry the *seat*, never the actor.
 - **Events are the truth.** Append-only JSONL; the board is a projection. Replay repairs a corrupted board — no state to corrupt that isn't reconstructible.
 - **Bounded autonomy.** Convergence rounds (default 3), budget hard-stops, stealable locks, stall detection. A hung agent is killed, not waited on.
 
@@ -73,14 +75,15 @@ bandit board         # the kanban
 
 Every card runs a bounded convergence dialogue refereed by the confidence ledger:
 
-1. **Actor pulls.** Executes the card, edits real files, reports a verification command.
-2. **Gate.** The verification command must exit 0. Red → critic *triages* (fixable by skill, or missing prerequisite?).
-3. **Critic evaluates.** Adversarially, with evidence demanded. Its verdicts persist in its own folder — a track record, not a vibe.
-4. **Converged?** Green + (pass, or plumbing-bypass, or low-confidence fail) → done. Otherwise: next round, with the critic's findings as feedback.
-5. **Same missing capability twice?** The factory spawns a specialist child serf for that capability.
-6. **No convergence after 3 rounds?** Card escalates to review. Nothing silently disappears.
+1. **Consult first (non-trivial cards).** The actor produces a plan; the master shows it to the critic *as a peer* — the critic argues free text and answers `DECISION: proceed | amend | reject`. It may **summon** a domain voice (`SUMMON: researcher`) — a spawned serf whose argument joins the thread. Bad plans die before execution tokens burn; amended plans carry the argument forward.
+2. **Actor pulls.** Executes the card, edits real files, reports a verification command.
+3. **Gate.** The harness re-runs the reported command itself and uses the *actual* exit code. Red → the seat triages (fixable by skill, or missing prerequisite?). A grader pass at a red gate is recorded as a contradiction — the seat's confidence is self-reported, the gate is not.
+4. **Grader seat.** One cheap call, criterion-by-criterion, track record in `.bandit/grading/`. It can never join the room it grades.
+5. **Stuck?** One consult: *same wall or different wall?* The specialist spawn falls out of the conversation instead of a regex counter.
+6. **Converged?** Green + (pass, or plumbing-bypass, or low-confidence fail) → done. Routed `amend`? The card requeues to backlog automatically (bounded at 2) — the loop re-opens its own review cards.
+7. **No convergence after 3 rounds?** The master routes (retry / specialist / escalate) on the full consult thread. Nothing silently disappears.
 
-Non-trivial pipelines get a **plan critique** first — the critic rejects bad plans before the actor burns a single execution token.
+The consult thread lives in the card folder (`card/consult.md`) — every argument, summon, and decision is part of the deliverable. Summons are one-shot, budget-counted, and registered as child serfs: the compounding of a research conversation, mechanically.
 
 ## Harnesses — any agent, one interface
 
@@ -153,7 +156,10 @@ bandit init            scaffold .bandit/ in the current project
 bandit task            add a card: bandit task "title" --accept "criterion"
 bandit board           show the kanban
 bandit start           run the factory loop (--agent/--model/--visible/--transport)
-bandit watch           live dashboard — see agents working
+bandit watch           live wave view — subscribes to events, renders on append
+bandit card <id>       the dossier: timeline, consult thread, verdicts, artifacts
+bandit doctor          9-point health check (exit 1 on failure — CI-safe)
+bandit serf            spawn a serf by hand (role template, mission, card binding)
 bandit events          show the event log (the truth)
 bandit chat            walk into a serf's pane and talk
 bandit panes           open/close visible serf panes (herdr)
@@ -187,8 +193,11 @@ bandit migrate         fold a v2 .serf/ into .bandit/
 │   └── done/
 ├── serfs/
 │   ├── actor/            # prompt.md, serf.md, journal/, outputs/, memory/, children/
-│   ├── critic/           # verdicts persist here — its track record
-│   └── master/
+│   ├── critic/           # consult replies + track record (read-only profile)
+│   ├── master/           # routing decisions
+│   ├── researcher/       # summonable: cites sources, marks unverified claims
+│   ├── architect/        # summonable: proposes shapes, names what it would NOT build
+│   └── <hand-spawned>/   # bandit serf <name> — same folders, same registry, first-class crew
 ├── events/               # append-only JSONL — the truth
 └── goal/                 # confidence ledger + bandit posteriors
 ```
@@ -203,10 +212,14 @@ Recursion is structural: a factory spawns child factories the way serfs spawn ch
 | [Harnesses](docs/harnesses.md) | adapter profiles, the four protocols, ACP lifecycle, gateway auth (any LLM backend), model routing |
 | [CLI reference](docs/cli.md) | every command with flags and examples |
 | [Appropriations](docs/appropriations.md) | the stolen — cited — research behind bandit: SoL-Pi's four mechanisms, Thompson sampling, event sourcing, and the full lineage |
+| [Installation](docs/installation.md) | the OmO-style walkthrough: humans + LLM-agent steps, doctor checks, troubleshooting |
+| [KISS discipline](docs/plans/kiss-discipline.md) | what is kept/frozen/forbidden — the measured-trigger rule that keeps the factory from overfitting |
+| [Summoned voices](docs/plans/summoned-voices-plan.md) | the consult design: spawning researchers into the conversation |
+| [Long-running harness design](docs/plans/long-running-harness-design.md) | the Goodhart-resistant governor: divergence monitors, floors, capping — with the full literature |
 
 ## Tests
 
-55 tests, one command, no mocks of convenience — real stub transports, real card folders:
+89 tests, one command, no mocks of convenience — real stub transports, real card folders:
 
 ```bash
 bun test
@@ -214,7 +227,7 @@ bun test
 
 ## Status
 
-v0.1 — the loop, the critic, the ledger, the adapters, and the panes are production-hardened on real work (an EMBA capstone strategy report was just written by a W1–W4 actor crew, failed adversarial review, and a FIX-1 repair pass — all autonomous). Recursive factory tree and remote control-plane profiles are next.
+v0.1 — the loop, the consult thread, the summoned voices, the classifier seat, the dossier, the streaming wave view, the ledger, the adapters, and the panes are production-hardened on real work — including a factory run on bandit's own source, which found and fixed three of its own defects (the amend-requeue dead end, the gate's backtick false-red, and the transport's blind stall-killer) while the dossier narrated every round. See [docs/plans/kiss-discipline.md](docs/plans/kiss-discipline.md) for what's frozen and why, and [docs/installation.md](docs/installation.md) for the full install + LLM-agent walkthrough.
 
 ## License
 

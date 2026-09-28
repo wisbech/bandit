@@ -105,6 +105,14 @@ export function readSerfFolder(dir: string): SerfFolder {
 
 export function renderPrompt(prompt: string, vars: Record<string, unknown>): string {
   return prompt.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (full, key: string) => {
+    // A literal key hit wins: {{actor.output}} resolves vars["actor.output"]
+    // before the dotted-path walk. This matters — the critic/judge templates
+    // use dotted names, and a flat key that shadows the path is deliberate.
+    if (key in vars && vars[key] !== undefined && vars[key] !== null) {
+      const flat: unknown = vars[key];
+      if (Array.isArray(flat)) return flat.map((c) => `- ${c}`).join("\n");
+      return String(flat);
+    }
     let cur: unknown = vars;
     for (const part of key.split(".")) {
       if (cur === null || cur === undefined) return full;
@@ -187,85 +195,130 @@ export function resolveTransport(cfg: TransportConfig, root: string): TransportC
   return cfg;
 }
 
+// opencode --format json emits one JSON object per line (step_start, text,
+// tool_use, tool_result, step_finish). Convert the event stream to the plain
+// text the gate/parser expects: concat the text parts; tool activity becomes
+// one line each so the transcript still shows what the agent DID.
+export function eventsToText(eventsJsonl: string): string {
+  const lines: string[] = [];
+  const tokens = { input: 0, output: 0 };
+  for (const line of eventsJsonl.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const e = JSON.parse(line);
+      if (e.type === "text") {
+        const t = String(e.part?.text ?? e.text ?? "");
+        if (t.trim()) lines.push(t);
+      } else if (e.type === "tool_use" || e.type === "tool") {
+        const name = e.part?.tool ?? e.tool ?? "tool";
+        lines.push(`[tool: ${name}]`);
+      } else if (e.type === "step_finish") {
+        const t = e.tokens ?? {};
+        tokens.input += Number(t.input ?? 0);
+        tokens.output += Number(t.output ?? 0) + Number(t.reasoning ?? 0);
+      }
+    } catch {}
+  }
+  if (tokens.input + tokens.output > 0) lines.push(`[tokens: in=${tokens.input} out=${tokens.output}]`);
+  return lines.join("\n") + "\n";
+}
+
 // Run one prompt through the transport. Writes output to the card folder.
 export async function runTransport(cfg: TransportConfig, prompt: string, cwd: string, outputPath: string, timeoutMs: number): Promise<RunResult> {
   mkdirSync(cwd, { recursive: true });
   if (cfg.kind === "headless") {
-    // v2's key insight: write output to a FILE and poll for growth, so a
-    // stalled agent (0% CPU, empty output) is detectable and killable.
-    // opencode streams to the file; we poll size every 10s.
-    // Cold-start grace: a local model's first load (ollama pulling GBs into
-    // VRAM) shows as 0% CPU on the agent proc for minutes. The stall counter
-    // only arms 3 minutes in — model load is not death (3rd {{actor.output}}
-    // failure mode, 2026-09-24: 34 empty runs, ollama cold = 0% CPU).
-    const stalled = (stallTurns: number, stallLimit: number) => stallTurns >= stallLimit;
-    const stallLimit = 6; // 6 x 10s = 60s of zero growth = stuck (after grace)
-    const stallGraceMs = 180_000;
-    // Environment discipline enforced, not instructed: TMPDIR is redirected
-    // into the project for every headless spawn, so serfs never scratch in
-    // the system /tmp (and opencode never asks for external_directory /tmp).
+    // EVENT-DRIVEN LIVENESS (OmO "monitors, not polling" — the marble-of-doom fix, 2026-09-28):
+    // The v2 design polled output-file growth every 10s and probed CPU% — but opencode
+    // headless writes stdout ONLY at turn end, so a slow-but-working agent (model queued
+    // on OLLAMA_NUM_PARALLEL=1, cold reload, long generation) is indistinguishable from a
+    // hung one. Three production Sisyphus cycles traced to this (2026-09-28).
+    // The fix: opencode `--format json` emits an event line per step AS IT HAPPENS
+    // (step_start/text/tool/step_finish). We read line-by-line, append each event to the
+    // output file immediately, and measure liveness as TIME SINCE LAST EVENT — a real
+    // progress signal, not a heuristic. CPU probing is deleted; the queue is the signal.
+    const isOpencode = cfg.command.includes("opencode");
+    const streamJson = isOpencode && !cfg.args.includes("--format");
     const scratch = join(cwd, ".bandit", "tmp");
     mkdirSync(scratch, { recursive: true });
-    const proc = Bun.spawn([cfg.command, ...cfg.args, prompt], {
+    const argv = streamJson ? [...cfg.args, "--format", "json", prompt] : [...cfg.args, prompt];
+    const proc = Bun.spawn([cfg.command, ...argv], {
       cwd,
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, TMPDIR: scratch },
+      env: { ...process.env, TMPDIR: scratch, OLLAMA_KEEP_ALIVE: process.env.OLLAMA_KEEP_ALIVE ?? "30m" },
     });
     const startedAt = Date.now();
     const timer = setTimeout(() => proc.kill(), timeoutMs);
 
-    // Poll for completion: process exit OR output-file stall (60s no growth
-    // while process is at 0% CPU → kill; a working agent writes continuously).
     const result = await new Promise<{ stdout: string; exitCode: number; stalled: boolean }>((resolve) => {
       let done = false;
-      let stallTurns = 0;
-      let lastSize = -1;
-      let lastCpu = -1;
       const finish = (stalled: boolean) => {
         if (done) return;
         done = true;
-        clearInterval(interval);
-        resolve({ stdout: "", exitCode: -1, stalled });
+        clearInterval(idleWatch);
+        resolve({ stdout: collected, exitCode: -1, stalled });
       };
-      const interval = setInterval(() => {
-        // liveness probe: process CPU. An agent that is thinking shows CPU;
-        // a hung one sits at 0%.
-        try {
-          const cpuOut = Bun.spawnSync(["ps", "-o", "%cpu=", "-p", String(proc.pid)]).stdout.toString().trim();
-          const cpu = parseFloat(cpuOut) || 0;
-          // A TUI agent alternates: bursts of CPU while generating, idle
-          // while streaming. Stall = 0% CPU for many consecutive checks —
-          // but only AFTER the cold-start grace (model load ≠ death).
-          const elapsed = Date.now() - startedAt;
-          if (elapsed < stallGraceMs) { lastCpu = cpu; return; }
-          if (cpu < 1) stallTurns += 1; else stallTurns = 0;
-          lastCpu = cpu;
-        } catch { stallTurns += 1; }
+      // Liveness by event arrival: an agent emitting events is working. The
+      // grace covers model load (no events yet is expected then).
+      const eventIdleLimit = 300_000; // 5 min without ANY event = stuck
+      let lastEventAt = Date.now();
+      let collected = "";
+      let writeStream: import("bun").FileSink | null = null;
+      const idleWatch = setInterval(() => {
         const elapsed = Date.now() - startedAt;
-        if (elapsed > timeoutMs) { try { proc.kill(); } catch {} finish(true); }
-        else if (stalled(stallTurns, stallLimit)) {
-          console.log(`      ⊘ agent stalled (0% CPU × ${stallLimit} checks after grace) — killing`);
+        if (elapsed > timeoutMs) { try { proc.kill(); } catch {} finish(true); return; }
+        if (Date.now() - lastEventAt > eventIdleLimit) {
+          console.log(`      ⊘ agent idle (${Math.round(eventIdleLimit / 1000)}s since last event) — killing`);
           try { proc.kill(); } catch {}
           finish(true);
         }
       }, 10_000);
+      // Stream: read stdout line-by-line; each line IS an event. Persist it
+      // immediately (the file becomes the live transcript for watch/dossier).
+      (async () => {
+        const reader = proc.stdout.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        try {
+          for (;;) {
+            const { value, done: rd } = await reader.read();
+            if (rd) break;
+            buf += decoder.decode(value, { stream: true });
+            let nl: number;
+            while ((nl = buf.indexOf("\n")) >= 0) {
+              const line = buf.slice(0, nl).trim();
+              buf = buf.slice(nl + 1);
+              if (!line) continue;
+              lastEventAt = Date.now();
+              collected += line + "\n";
+              if (streamJson) {
+                if (!writeStream) writeStream = Bun.file(outputPath).writer();
+                writeStream.write(line + "\n");
+              }
+            }
+          }
+          if (writeStream) writeStream.flush();
+        } catch {}
+      })();
       proc.exited.then((code) => {
-        clearInterval(interval);
         if (done) return;
         done = true;
-        clearInterval(interval);
-        resolve({ stdout: "", exitCode: code, stalled: false });
+        clearInterval(idleWatch);
+        resolve({ stdout: collected, exitCode: code, stalled: false });
       });
     });
 
-    // Drain stdout after exit/stall
-    const [stdout] = await Promise.all([
-      new Response(proc.stdout).text(),
-    ]);
+    // The final output file: for streamed (json) runs, events land in the file
+    // as they arrive; convert to the plain text the gate/parser expects.
+    if (streamJson) {
+      const text = eventsToText(result.stdout);
+      writeFileSync(outputPath, text);
+      clearTimeout(timer);
+      return { ok: !result.stalled && result.exitCode === 0, output: text, tokensUsed: Math.ceil(text.length / 4) };
+    }
     clearTimeout(timer);
-    writeFileSync(outputPath, stdout);
-    return { ok: !result.stalled && result.exitCode === 0, output: stdout, tokensUsed: Math.ceil(stdout.length / 4) };
+    writeFileSync(outputPath, result.stdout);
+    return { ok: !result.stalled && result.exitCode === 0, output: result.stdout, tokensUsed: Math.ceil(result.stdout.length / 4) };
   }
   if (cfg.kind === "uhp") {
     // UHP: cfg.command = base url, cfg.args[0] = model, cfg.args[1] = api key (optional)
@@ -508,7 +561,14 @@ export function parseGate(output: string): GateResult {
   const cmdMatch = output.match(/VERIFICATION_COMMAND:?\s*\*{0,2}\s*(.+)/i);
   const exitMatch = output.match(/VERIFICATION_EXIT_CODE:?\s*\*{0,2}\s*(\d+)/i);
   const outMatch = output.match(/VERIFICATION_OUTPUT:?\s*\*{0,2}\s*([\s\S]*?)(?=\n[A-Z_]+:|$)/i);
-  const command = cmdMatch?.[1]?.trim();
+  // Models wrap the command in markdown — backticks (`bun test`) or bold
+  // (**bun test**). Strip the wrapper pair; executing literal backticks as
+  // command substitution is the false red that burned the summon probe
+  // ("bash: 4: command not found" while the work was real).
+  const command = (cmdMatch?.[1]?.trim() ?? "")
+    .replace(/^`(.*)`$/, "$1")
+    .replace(/\*{2}$/, "")
+    .trim();
   const exitCode = exitMatch ? parseInt(exitMatch[1], 10) : undefined;
   return {
     green: command !== undefined && exitCode === 0,
@@ -588,7 +648,16 @@ export async function selfVerifyGateAsync(gate: GateResult, cardDir: string, tim
   result.attempted = true;
   const logPath = join(cardDir, "verification-output.log");
   const wrapped = `{ ${gate.command} ; } 2>&1 | tee "${logPath}" ; exit \${PIPESTATUS[0]}`;
-  const proc = Bun.spawn(["bash", "-c", wrapped], { cwd: cardDir, stdout: "pipe", stderr: "pipe" });
+  // Re-run from the PROJECT ROOT, not the card folder: acceptance commands are
+  // written against the project (bun test, pytest, …). Running them from
+  // .bandit/board/<col>/<card>/ fails on cwd — the false red that burned
+  // muky62ac for three rounds (self-verify reported=0, actual=1 with
+  // "0 test files matching" — the actor's work was real, the seat's cwd was
+  // wrong). Root = four levels up from the card folder; fall back to cardDir
+  // when the layout doesn't match.
+  const projectRoot = join(cardDir, "..", "..", "..", "..");
+  const cwd = existsSync(join(projectRoot, ".bandit", "config.json")) ? projectRoot : cardDir;
+  const proc = Bun.spawn(["bash", "-c", wrapped], { cwd, stdout: "pipe", stderr: "pipe" });
   const timer = setTimeout(() => { try { proc.kill(); } catch {} result.timedOut = true; }, timeoutMs);
   const code = await proc.exited;
   clearTimeout(timer);

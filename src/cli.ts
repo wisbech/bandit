@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
-import { runLoop, cardsIn } from "./loop";
+import { runLoop, cardsIn, readEvents } from "./loop";
+import { dossierCardDir } from "./dossier";
 
 // cli.ts — command table (~30 lines). No switch-casing.
 
@@ -112,6 +113,12 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
+// Headless config carries the transport command directly (profile-less shape).
+function headlessCfgCommand(cfg: Record<string, unknown>): string | null {
+  const cmd = cfg.command;
+  return typeof cmd === "string" && cmd.length > 0 ? cmd : null;
+}
+
 const COMMANDS: Command[] = [
   {
     name: "init",
@@ -131,14 +138,82 @@ const COMMANDS: Command[] = [
         mkdirSync(join(banditDir(), "serfs", name, "outputs"), { recursive: true });
         mkdirSync(join(banditDir(), "serfs", name, "memory"), { recursive: true });
         mkdirSync(join(banditDir(), "serfs", name, "children"), { recursive: true });
-        const identity = `# ${name}\n\n## Mission\n${name === "master" ? "Coordinate the factory. The buck stops here." : name === "critic" ? "Adversarially evaluate work. Every verdict cites evidence." : "Execute tasks. Edit real source files. Verify or fix."}\n\n## Persona\nDirect.\n\n## Fate\nIf I fail 3 times, the task is bad, not me.\n`;
+        const identity = `# ${name}\n\n## Mission\n${name === "master" ? "Coordinate the factory. The buck stops here. Consult the critic early — the critic is your peer, present from problem-start, not a post-mortem." : name === "critic" ? "Argue as the master's peer. Be in the room at problem-start, not after the failure. Be convincable — concede what was answered." : "Execute tasks. Edit real source files. Verify or fix."}\n\n## Persona\nDirect.\n\n## Fate\nIf I fail 3 times, the task is bad, not me.\n`;
         writeFileSync(join(banditDir(), "serfs", name, "serf.md"), identity);
         writeFileSync(join(banditDir(), "serfs", name, "origin.md"), `spawned_by: init\ncard: \ncreated: ${new Date().toISOString()}\n`);
         writeFileSync(join(banditDir(), "serfs", name, "state.md"), "# State\n\n");
-        writeFileSync(join(banditDir(), "serfs", name, "prompt.md"), `You are ${name}. ${name === "actor" ? "Execute the task. Edit real source files.\n\nTASK: {{card.task}}\n\nACCEPTANCE:\n{{card.acceptance}}\n\nReport VERIFICATION_COMMAND, VERIFICATION_EXIT_CODE, VERIFICATION_OUTPUT." : name === "critic" ? "Evaluate adversarially. Demand evidence for every criterion." : "Coordinate the factory."}\n`);
+        writeFileSync(join(banditDir(), "serfs", name, "prompt.md"), `You are ${name}. ${name === "actor" ? "Execute the task. Edit real source files.\n\nTASK: {{card.task}}\n\nACCEPTANCE:\n{{card.acceptance}}\n\nReport VERIFICATION_COMMAND, VERIFICATION_EXIT_CODE, VERIFICATION_OUTPUT." : name === "critic" ? "You are the master's peer — present from problem-start, not after the failure. When a CONSULT arrives, argue free text: hard when you disagree, conceding when answered. The master decides; your job is that the decision is made with your best argument in the room. If the argument needs knowledge you do not have, name the voice that does — end with SUMMON: <role> and your reasoning. End consult replies with one line DECISION: proceed | amend | reject | specialist | escalate (specialist: <capability> when the actor lacks something it cannot learn mid-card)." : "Coordinate the factory. Consult the critic at plan time and on stagnation — the thread is the conversation."}\n`);
+      }
+      // Summonable roles: the domain voices the consult thread can bring in
+      // (docs/plans/summoned-voices-plan.md). Prompt-only; the project edits them.
+      for (const [role, prompt] of [
+        ["researcher", "You research before you argue. Cite sources (papers, docs, code) and mark claims you cannot verify as unverified. You are summoned as an instrument: advise the master with the strongest argument the evidence supports, then stand down."],
+        ["architect", "You design structures, not solutions. Propose the shape of the thing — organs, boundaries, data flow — and say explicitly what you would NOT build. The loop's organs build it."],
+      ] as [string, string][]) {
+        const roleDir = join(banditDir(), "serfs", role);
+        mkdirSync(roleDir, { recursive: true });
+        writeFileSync(join(roleDir, "prompt.md"), `You are ${role}. ${prompt}\n`);
       }
       ensureHarnessProfiles();
       console.log("  .bandit/ created. A bandit is a folder. A card is a folder.");
+    },
+  },
+  {
+    name: "serf",
+    summary: 'spawn a serf by hand: bandit serf <name> [--role researcher] [--prompt "mission"] [--card <id>]',
+    fn: async (args) => {
+      if (!existsSync(banditDir())) fail("no .bandit/ — run bandit init");
+      if (args.includes("--list")) {
+        const serfsDir = join(banditDir(), "serfs");
+        for (const r of listSerfRoles()) console.log(`  ${r}${existsSync(join(serfsDir, r, "origin.md")) ? "" : "  (core organ)"}`);
+        return;
+      }
+      const name = args[0] && !args[0].startsWith("--") ? args[0] : null;
+      if (!name) fail('usage: bandit serf <name> [--role <template>] [--prompt "mission"] [--card <cardId>]\n       bandit serf --list');
+      const serfsDir = join(banditDir(), "serfs");
+      const sanitizedName = name.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+      const targetDir = join(serfsDir, sanitizedName);
+      const promptPath = join(targetDir, "prompt.md");
+      if (existsSync(promptPath)) fail(`serf "${sanitizedName}" already exists — edit ${promptPath} instead`);
+      mkdirSync(targetDir, { recursive: true });
+      for (const sub of ["journal", "outputs", "memory", "children"]) mkdirSync(join(targetDir, sub), { recursive: true });
+
+      // prompt: --prompt flag > --role template copied from an existing serf > minimal default
+      const promptFlagIdx = args.indexOf("--prompt");
+      const roleFlagIdx = args.indexOf("--role");
+      const cardFlagIdx = args.indexOf("--card");
+      const cardId = cardFlagIdx >= 0 ? args[cardFlagIdx + 1] : "";
+      const mission = promptFlagIdx >= 0 ? args[promptFlagIdx + 1] : null;
+      const roleTemplate = roleFlagIdx >= 0 ? args[roleFlagIdx + 1] : null;
+
+      let promptText: string;
+      if (mission) {
+        promptText = `You are ${sanitizedName}. ${mission}\n\nENVIRONMENT DISCIPLINE: scratch only under the project directory (cwd or .bandit/tmp). Never /tmp. Use the project venv (uv/bun); never install globally.\n`;
+      } else if (roleTemplate && existsSync(join(serfsDir, roleTemplate, "prompt.md"))) {
+        promptText = readFileSync(join(serfsDir, roleTemplate, "prompt.md"), "utf-8");
+      } else if (roleTemplate && roleTemplate === "researcher") {
+        promptText = `You are ${sanitizedName}, a researcher. Research before you argue; cite sources and mark unverified claims. Advise, then stand down.\n`;
+      } else if (roleTemplate && roleTemplate === "architect") {
+        promptText = `You are ${sanitizedName}, an architect. Design structures, not solutions. Propose the shape and say what you would NOT build.\n`;
+      } else {
+        promptText = `You are ${sanitizedName}. ${roleTemplate ? `You inherit the ${roleTemplate} stance.` : "A serf spawned by hand."} Read the card you are handed, do the work, report VERIFICATION_COMMAND, VERIFICATION_EXIT_CODE, VERIFICATION_OUTPUT.\n`;
+      }
+      writeFileSync(join(targetDir, "prompt.md"), promptText);
+      writeFileSync(join(targetDir, "serf.md"), `# ${sanitizedName}\n\n## Mission\n${mission ?? (roleTemplate ? `The ${roleTemplate} stance, standing for this card.` : "Standing serf — hand it cards.")}\n\n## Persona\nDirect.\n\n## Fate\nIf I fail 3 times, the task is bad, not me.\n`);
+      writeFileSync(join(targetDir, "origin.md"), `spawned_by: hand\ncard: ${cardId}\ncreated: ${new Date().toISOString()}\n${roleTemplate ? `role_template: ${roleTemplate}\n` : ""}`);
+      const { registerChild } = await import("./bandit");
+      registerChild(process.cwd(), cardId ? "actor" : "master", "hand/" + sanitizedName, {
+        spawnedBy: "hand",
+        cardId: cardId || undefined,
+        problem: "Hand-spawned serf",
+        motivation: mission ?? "manual spawn",
+        createdAt: new Date().toISOString(),
+      });
+      const { emit } = await import("./loop");
+      emit("serf.spawned", { serf: sanitizedName, by: "hand", card: cardId || undefined, mission: (mission ?? "").slice(0, 80) });
+      console.log(`  ✓ serf ${sanitizedName}: ${promptPath}`);
+      console.log(`  → give it a pane: bandit panes ${sanitizedName}  (herdr; or headless runs read serfs/${sanitizedName}/prompt.md)`);
+      void roleFlagIdx;
     },
   },
   {
@@ -160,13 +235,43 @@ const COMMANDS: Command[] = [
   },
   {
     name: "board",
-    summary: "show the kanban",
-    fn: () => {
+    summary: "show the kanban (--verbose folds in-flight card events + frontmatter)",
+    fn: (args) => {
       if (!existsSync(banditDir())) fail("no .bandit/");
+      const verbose = args.includes("--verbose");
+      const events = verbose ? readEvents() : [];
       for (const col of ["backlog", "in-progress", "review", "done"]) {
         const cards = cardsIn(col as never);
         console.log(`\n${col} (${cards.length}):`);
-        for (const c of cards) console.log(`  ${c.id} — ${c.frontmatter.title ?? ""}`);
+        for (const c of cards) {
+          console.log(`  ${c.id} — ${c.frontmatter.title ?? ""}`);
+          if (verbose) {
+            // Projection only: fold this card's events + frontmatter into a
+            // stage/round/gate/verdict line. Nothing here writes state.
+            const mine = events.filter((e) => e.card === c.id);
+            const pipeline = [...mine].reverse().find((e) => e.type === "pipeline.selected")?.pipeline;
+            const rounds = mine.filter((e) => e.type === "round.started");
+            const round = rounds.length ? Number(rounds[rounds.length - 1].round) : 0;
+            const gate = [...mine].reverse().find((e) => e.type === "verification.green" || e.type === "verification.red");
+            const gateState = gate ? (gate.type === "verification.green" ? "green" : "red") : null;
+            const verdict = [...mine].reverse().find((e) => e.type === "critic.verdict");
+            const verdictState = verdict ? `${verdict.verdict}${verdict.confidence !== undefined ? ` (${Number(verdict.confidence).toFixed(2)})` : ""}` : null;
+            const fm: string[] = [];
+            if (c.frontmatter.pipeline) fm.push(c.frontmatter.pipeline);
+            if (c.frontmatter.lifetimeTokensUsed) fm.push(`tokens ${c.frontmatter.lifetimeTokensUsed}`);
+            if (c.frontmatter.budgetLimit) fm.push(`budget ${c.frontmatter.budgetLimit}`);
+            if (c.frontmatter.decision) fm.push(`decision ${c.frontmatter.decision}`);
+            if (c.frontmatter.route) fm.push(`route ${c.frontmatter.route}`);
+            const parts = [
+              `stage: ${pipeline ?? "unstarted"}`,
+              `round ${round}`,
+              `gate: ${gateState ?? "none"}`,
+              `verdict: ${verdictState ?? "none"}`,
+            ];
+            if (fm.length) parts.push(`fm: ${fm.join(" · ")}`);
+            console.log(`    ${parts.join(" · ")}`);
+          }
+        }
       }
       console.log();
     },
@@ -232,14 +337,14 @@ const COMMANDS: Command[] = [
         const model = await choose("Which model? (all ollama models work with every agent)", modelChoices);
         cfg.args = agentLaunch(cfg.command, model, "headless").filter((a) => a !== "-p" && a !== "--no-session" && a !== "--print");
         // ── Visibility picker: escalation ladder — start small, open up as
-        //    needed. master only (supervision), + critic (the GAN), + crew.
+        //    needed. master only (supervision), + judge+critic (the GAN), + crew.
         const allSerfs = listSerfRoles();
         const crew = allSerfs.filter((r) => r !== "master" && r !== "critic");
         const visibility = await choose("Which serfs do you want to SEE while it runs?", [
           { label: "none — headless, watch via `bandit watch`", value: [] as string[] },
           { label: "master — supervision only", value: ["master"] as string[] },
-          { label: "master + critic — the GAN, live", value: ["master", "critic"] as string[] },
-          ...(crew.length ? [{ label: `master + critic + serfs — all ${allSerfs.length}`, value: allSerfs } as { label: string; value: string[] }] : []),
+          { label: "master + critic — the GAN, live", value: ["master", "critic"].filter((r) => allSerfs.includes(r)) as string[] },
+          ...(crew.length ? [{ label: `master + judge + critic + serfs — all ${allSerfs.length}`, value: allSerfs } as { label: string; value: string[] }] : []),
           ...allSerfs.filter((r) => !["master", "critic"].includes(r)).map((r) => ({ label: r, value: [r] as string[] })),
         ]);
         cfg.visibleSerfs = visibility;
@@ -532,7 +637,7 @@ const COMMANDS: Command[] = [
         }
         // Inject after boot; confirm the TUI took the prompt with a short
         // event wait — a status transition (idle→working) means it accepted.
-        await herdr.sendCommand(pane.pane_id, `Read ${promptFile} and adopt that role fully. You are the ${role} bandit of this factory. ENVIRONMENT DISCIPLINE: every file you create — scripts, probes, downloads, scratch, data — goes under the project directory (cwd or .bandit/tmp). NEVER write to /tmp or anywhere outside the project. Use the project's virtual environment (uv/bun); never install globally. ${role === "critic" ? "Wait for the harness to show you work to evaluate." : "Wait for the harness to hand you cards."}`);
+        await herdr.sendCommand(pane.pane_id, `Read ${promptFile} and adopt that role fully. You are the ${role} bandit of this factory. ENVIRONMENT DISCIPLINE: every file you create — scripts, probes, downloads, scratch, data — goes under the project directory (cwd or .bandit/tmp). NEVER write to /tmp or anywhere outside the project. Use the project's virtual environment (uv/bun); never install globally. ${role === "critic" ? "Wait for the harness to open a consult with you." : "Wait for the harness to hand you cards."}`);
         const afterEvent = await Promise.race([
           herdr.nextPaneEvent(pane.pane_id, 4_000),
           new Promise((r) => setTimeout(() => r(null), 4_000)),
@@ -557,6 +662,18 @@ const COMMANDS: Command[] = [
       const stop = watchLoop(2000);
       process.on("SIGINT", () => { stop(); process.exit(0); });
       await new Promise(() => {});
+    },
+  },
+  {
+    name: "card",
+    summary: "the dossier for one card — timeline, consult chat, grader verdicts, artifacts",
+    fn: async (args) => {
+      if (!existsSync(banditDir())) fail("no .bandit/ — run bandit init");
+      const id = args[0];
+      if (!id) fail("usage: bandit card <id>");
+      const { renderCardDossier } = await import("./dossier");
+      if (!dossierCardDir(process.cwd(), id)) fail(`no card '${id}' on the board — try bandit board`);
+      console.log("\n" + renderCardDossier(process.cwd(), id) + "\n");
     },
   },
   {
@@ -703,6 +820,92 @@ const COMMANDS: Command[] = [
         }
       }
       console.log();
+    },
+  },
+  {
+    name: "doctor",
+    summary: "health-check the factory — exit 1 if any check failed (CI-safe)",
+    fn: async () => {
+      if (!existsSync(banditDir())) fail("no .bandit/ — run bandit init");
+      const checks: { name: string; ok: boolean; warn?: boolean; note: string }[] = [];
+      const add = (name: string, ok: boolean, note: string, warn = false) => checks.push({ name, ok, note, warn });
+
+      // 1. SCAFFOLD — the folders every loop assumes
+      const cols = ["backlog", "in-progress", "review", "done"];
+      const missingCols = cols.filter((c) => !existsSync(join(banditDir(), "board", c)));
+      add("Board", missingCols.length === 0, missingCols.length === 0 ? "all four columns present" : `missing: ${missingCols.join(", ")}`);
+      add("Events dir", existsSync(join(banditDir(), "events")), ".bandit/events/ — the truth");
+
+      // 2. SERFS — the organs the loop addresses by name
+      const organRoles = ["master", "critic", "actor"];
+      const missingSerfs = organRoles.filter((r) => !existsSync(join(banditDir(), "serfs", r, "prompt.md")));
+      const summonable = listSerfRoles().filter((r) => !organRoles.includes(r));
+      add("Serfs", missingSerfs.length === 0, missingSerfs.length === 0 ? `master/critic/actor ok · summonable: ${summonable.length ? summonable.join(", ") : "none (consults can't summon)"}` : `missing prompt.md: ${missingSerfs.join(", ")}`, missingSerfs.length === 0 && summonable.length === 0);
+
+      // 3. CONFIG + transport resolves to a real command
+      let cfg: Record<string, unknown> = {};
+      try { cfg = JSON.parse(readFileSync(join(banditDir(), "config.json"), "utf-8")); } catch {}
+      const transportName = String(cfg.transport ?? "headless");
+      const { loadHarnessProfiles } = await import("./runner");
+      const profiles = loadHarnessProfiles(process.cwd());
+      const profile = profiles.get(transportName);
+      const cfgCommand = headlessCfgCommand(cfg);
+      const headlessCfg = transportName === "headless" ? Boolean(cfgCommand) : true;
+      const transportOk = Boolean(profile || cfgCommand);
+      add("Transport", transportOk, profile ? `${transportName} → ${profile.protocol} (${profile.command})` : cfgCommand ? `${transportName} → headless (${cfgCommand})` : `profile "${transportName}" not found in .bandit/harnesses/`);
+
+      // 4. HARNESS BINARY on PATH
+      const command = profile ? profile.command : cfgCommand;
+      let binOk = false;
+      let binNote = "no command";
+      if (command) {
+        try {
+          execSync(`command -v ${String(command).split("/").pop()}`, { stdio: "ignore" });
+          binOk = true;
+          binNote = `${command} on PATH`;
+        } catch {
+          binNote = `${command} not on PATH`;
+        }
+      }
+      add("Harness binary", binOk, binNote);
+
+      // 5. STALE LOCK (a dead factory holds the board hostage)
+      const lockPath = join(banditDir(), "run.lock");
+      if (!existsSync(lockPath)) add("Board lock", true, "no stale run.lock");
+      else {
+        const pid = parseInt(readFileSync(lockPath, "utf-8").trim(), 10);
+        let alive = false;
+        try { process.kill(parseInt(readFileSync(lockPath, "utf-8"), 10), 0); alive = true; } catch {}
+        add("Lock", true, alive ? `run.lock held by live pid ${readFileSync(lockPath, "utf-8")} — visitors join as watch-only` : `stale run.lock (pid dead) — will auto-clear on next start`, !alive);
+      }
+
+      // 6. DECISIONS port (optional organ — warn-only when absent)
+      const { loadDecisionConfig } = await import("./decisions");
+      const dcfg = loadDecisionConfig(process.cwd());
+      add("Decisions port", true, dcfg ? `${dcfg.evaluator} configured (graded judging)` : "none configured — grading falls to the classifier seat (advisory)", !dcfg);
+
+      // 7. BUDGETS sanity: any card over its own limit still on the frontier?
+      const { cardsIn, readEvents } = await import("./loop");
+      const frontier = [...cardsIn("backlog" as never), ...cardsIn("in-progress" as never)] as { id: string; frontmatter: Record<string, string> }[];
+      const stuck = frontier.filter((c) => parseInt(c.frontmatter.lifetimeTokensUsed ?? "0", 10) >= parseInt(c.frontmatter.budgetLimit ?? "0", 10));
+      add("Budgets", stuck.length === 0, stuck.length === 0 ? "no frontier card over budget" : `budget-exhausted on frontier: ${stuck.map((c) => c.id).join(", ")} (start will skip them)`);
+
+      // 8. EVENT FLOW: is the factory breathing?
+      const events = readEvents();
+      const today = new Date().toISOString().slice(0, 10);
+      const todayEvents = events.filter((e) => String(e.ts).startsWith(today));
+      add("Event log", events.length > 0, `${events.length} total · ${todayEvents.length} today`, todayEvents.length === 0);
+
+      // render
+      console.log(`\n  ═══ BANDIT DOCTOR ═══════════════════════`);
+      let failed = 0;
+      for (const c of checks) {
+        const mark = c.ok ? (c.warn ? "◐" : "✓") : "✗";
+        if (!c.ok) failed++;
+        console.log(`  ${mark} ${c.name.padEnd(14)} ${c.note}`);
+      }
+      console.log(`\n  ${failed === 0 ? "healthy — all checks pass" : failed + " check(s) failed"}${failed === 0 && checks.some((c) => c.warn) ? " (warnings present)" : ""}\n`);
+      if (failed > 0) process.exitCode = 1;
     },
   },
   {

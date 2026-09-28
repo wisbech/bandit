@@ -53,10 +53,10 @@ describe("V3-1: critic verdict parsing", () => {
 });
 
 describe("V3-1: critic gate in the loop", () => {
-  test("green verification + critic pass → done, verdict in critic outputs", async () => {
+  test("green verification + grader pass → done, verdict in grading track record", async () => {
     seedCard("critic-pass");
     stub("stub-a.sh", greenOutput());
-    // critic stub passes with confidence
+    // grader stub passes with confidence
     const result = await runLoop({
       once: true,
       root,
@@ -64,7 +64,8 @@ describe("V3-1: critic gate in the loop", () => {
       maxRetries: 2,
     });
     expect(result.completed).toBe(1);
-    const verdict = join(root, ".bandit", "serfs", "critic", "outputs", "critic-pass.md");
+    // grading is the classifier seat's job — its track record is .bandit/grading/
+    const verdict = join(root, ".bandit", "grading", "critic-pass.md");
     expect(existsSync(verdict)).toBe(true);
     expect(readFileSync(verdict, "utf-8")).toContain("VERDICT:");
   });

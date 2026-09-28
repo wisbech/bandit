@@ -1,11 +1,15 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, watch, closeSync, openSync, readSync, fstatSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 
 // watch.ts — the visibility adapter. Agents in bandit are headless processes;
 // visibility comes from what they leave on disk: events (truth), card output
 // files (live growth), and the process table (who is actually running).
-// One render function, one loop. KISS — no herdr, no panes.
+// One render function, one subscription. KISS — no herdr, no panes.
+//
+// The wave view: rows per column, stage/role/gate per in-flight card, and the
+// last consult exchange visible live — all fed by an incremental append tail
+// (fs.watch wakes a byte-offset tail of events/*.jsonl; no poll repaint).
 
 const COLUMNS = ["backlog", "in-progress", "review", "done"] as const;
 
@@ -60,58 +64,200 @@ function runningAgents(): RunningAgent[] {
   }
 }
 
-// Live output growth: the actor writes run-*.md as it works.
-function cardProgress(): { card: string; bytes: number; outputs: number; lastModified: string }[] {
-  const out: { card: string; bytes: number; outputs: number; lastModified: string }[] = [];
-  for (const col of ["in-progress", "review"]) {
-    const colDir = dir("board", col);
-    if (!existsSync(colDir)) continue;
-    for (const cardId of readdirSync(colDir)) {
-      const actual = join(dir("board"), col, cardId, "outputs");
-      if (!existsSync(actual)) continue;
-      let bytes = 0, outputs = 0, last = "";
+// ── INCREMENTAL APPEND TAIL (events/*.jsonl, byte-offset, no poll repaint) ──
+// fs.watch subscribes to .bandit/events/; on each append event a byte-offset
+// tail reads only the newly grown bytes (from each file's remembered offset),
+// parses the new complete lines, and feeds the render. No directory rescans,
+// no re-reading whole files, no interval polling of file contents.
+
+export interface WaveEvent {
+  type: string;
+  ts: string;
+  [k: string]: unknown;
+}
+
+// One tail cursor per known jsonl: { offset } (bytes consumed) + a partial
+// buffer for a line that ends mid-write (append split across wakeups).
+interface TailState {
+  offset: number;
+  partial: string;
+}
+
+export class EventTail {
+  private cursors = new Map<string, TailState>();
+  public events: WaveEvent[] = [];
+  public maxEvents = 400;
+
+  // Read only the bytes appended since the last visit, per file. Returns the
+  // newly parsed events. Incremental: files are read from their remembered
+  // offset, never re-scanned; rotation (a new jsonl appearing) is picked up
+  // by statting the dir on each fs.watch wakeup (cheap, event-gated).
+  drain(): WaveEvent[] {
+    const eventsDir = dir("events");
+    if (!existsSync(eventsDir)) return [];
+    const files = readdirSync(eventsDir).filter((f) => f.endsWith(".jsonl")).sort();
+    const fresh: WaveEvent[] = [];
+    for (const f of files) {
+      const path = join(eventsDir, f);
+      let size = 0;
+      try { size = statSync(path).size; } catch { continue; }
+      let cursor = this.cursors.get(f);
+      if (!cursor) {
+        // Fresh file (first sight: the initial render, or a rotation) — read
+        // from 0 like `tail -F` picking up a file, then go incremental.
+        cursor = { offset: 0, partial: "" };
+        this.cursors.set(f, cursor);
+      }
+      if (size < cursor.offset) cursor = { offset: 0, partial: "" }; // truncated
+      if (size <= cursor.offset) continue; // nothing appended since last visit
+      const fh = openSync(path, "r");
       try {
-        for (const f of readdirSync(actual)) {
-          const st = statSync(join(actual, f));
-          bytes += st.size; outputs += 1;
-          if (st.mtime.toISOString() > last) last = st.mtime.toISOString();
+        const chunk = Buffer.alloc(size - cursor.offset);
+        readSync(fh, chunk, 0, chunk.length, cursor.offset);
+        const text = cursor.partial + chunk.toString("utf-8");
+        const lines = text.split("\n");
+        cursor.partial = lines.pop() ?? ""; // last line may end mid-append
+        cursor.offset = size;
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try { fresh.push(JSON.parse(line)); } catch {}
         }
-      } catch {}
-      out.push({ card: cardId, bytes, outputs, lastModified: last.slice(11, 19) });
+      } finally {
+        closeSync(fh);
+      }
     }
+    if (fresh.length) {
+      this.events = [...this.events, ...fresh].slice(-this.maxEvents);
+    }
+    return fresh;
   }
-  return out;
 }
 
-function recentEvents(limit = 12): { ts: string; line: string }[] {
-  const eventsDir = dir("events");
-  if (!existsSync(eventsDir)) return [];
-  const today = new Date().toISOString().slice(0, 10);
-  const candidates = readdirSync(eventsDir).filter((f) => f.endsWith(".jsonl")).sort().slice(-2);
-  const out: { ts: string; line: string }[] = [];
-  for (const f of candidates) {
-    for (const line of readFileSync(join(eventsDir, f), "utf-8").split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const e = JSON.parse(line);
-        const payload = Object.entries(e).filter(([k]) => !["type", "ts"].includes(k)).map(([k, v]) => `${k}=${String(v).slice(0, 40)}`).join(" ");
-        out.push({ ts: e.ts.slice(11, 19), line: `${e.type} ${payload}`.slice(0, 110) });
-      } catch {}
-    }
-  }
-  return out.slice(-limit);
+// ── CONSULT TAIL (last master↔critic exchange per card) ──
+// card/consult.md grows as "**by:**\n\n<text>\n\n" turns (loop.ts). The live
+// view shows only the LAST exchange: the latest master turn and the latest
+// critic turn, tail-trimmed. Reads the last ~2 KiB — the thread is append-only.
+
+interface ConsultTurnView {
+  by: string;
+  text: string;
 }
 
-function boardLine(): string {
-  const counts: Record<string, number> = {};
+export function lastConsultTurns(cardDir: string): ConsultTurnView[] {
+  const p = join(cardDir, "consult.md");
+  if (!existsSync(p)) return [];
+  let raw = "";
+  try {
+    const st = statSync(p);
+    const read = Math.min(st.size, 2048);
+    const fh = openSync(p, "r");
+    try {
+      const chunk = Buffer.alloc(read);
+      readSync(fh, chunk, 0, read, st.size - read);
+      raw = chunk.toString("utf-8");
+    } finally {
+      closeSync(fh);
+    }
+  } catch {
+    return [];
+  }
+  const turns: ConsultTurnView[] = [];
+  // Summoned voices write `**<role>:**` turns too (loop.ts summonConsultVoice)
+  // — they are thread voices; render them with the same cell treatment.
+  const parts = raw.split(/\*\*([a-z][a-z0-9 _-]{0,32}):\*\*/i);
+  for (let i = 1; i < parts.length; i += 2) {
+    const by = parts[i].trim().toLowerCase();
+    const text = (parts[i + 1] ?? "").trim();
+    if (!text) continue;
+    turns.push({ by, text: text.slice(-400) });
+  }
+  return turns.slice(-2); // the last exchange (however many voices it took)
+}
+
+function trimCell(s: string, width: number): string {
+  return s.length > width ? s.slice(0, width - 1) + "…" : s.padEnd(width);
+}
+
+// ── WAVE ROWS (per column, stage/role/gate per in-flight card) ──
+
+interface WaveCard {
+  id: string;
+  stage: string;
+  role: string;
+  gate: string;
+  consult: ConsultTurnView[];
+  bytes: number;
+  outputs: number;
+}
+
+// Per in-flight card: stage = latest pipeline event, role = who is on it (the
+// running agent's role hint when the process table knows, else the last
+// actor-side event actor), gate = latest verification/gate signal.
+function waveCard(root: string, cardDir: string, cardId: string, events: WaveEvent[]): WaveCard {
+  const mine = events.filter((e) => e.card === cardId);
+  const pipeline = [...mine].reverse().find((e) => e.type === "pipeline.selected")?.pipeline as string | undefined;
+  const stage = pipeline ?? ([...mine].some((e) => e.type === "round.started") ? "running" : "unstarted");
+  const gateEv = [...mine].reverse().find((e) =>
+    e.type === "verification.green" || e.type === "verification.red" || e.type === "gate.selfverify");
+  const gate = gateEv
+    ? gateEv.type === "verification.green" ? "green"
+      : gateEv.type === "verification.red" ? "red"
+        : `self ${gateEv.reported ?? "?"}`
+    : "none";
+  // role: the process-table hint is authoritative when present; otherwise the
+  // last round/gate event implies an actor, a consult event implies critic.
+  let role = "?";
+  const consultSeen = mine.some((e) => e.type.startsWith("consult."));
+  if (consultSeen) role = "master↔critic";
+  else if (mine.some((e) => e.type === "round.started")) role = "actor";
+  // live output growth
+  let bytes = 0, outputs = 0;
+  const outputsDir = join(cardDir, "outputs");
+  if (existsSync(outputsDir)) {
+    try {
+      for (const f of readdirSync(outputsDir)) {
+        bytes += statSync(join(outputsDir, f)).size;
+        outputs += 1;
+      }
+    } catch {}
+  }
+  void root;
+  return { id: cardId, stage, role, gate, consult: lastConsultTurns(cardDir), bytes, outputs };
+}
+
+function waveRows(events: WaveEvent[]): string[] {
+  const lines: string[] = [];
+  const W = 34; // id cell width
+  const inflight = new Set(["in-progress", "review"]);
   for (const col of COLUMNS) {
     const colDir = dir("board", col);
-    try { counts[col] = readdirSync(colDir).length; } catch { counts[col] = 0; }
+    let cardIds: string[] = [];
+    try { cardIds = readdirSync(colDir).filter((n) => existsSync(join(colDir, n))); } catch {}
+    if (cardIds.length === 0) continue;
+    lines.push(color("1;37", `── ${col.toUpperCase()} (${cardIds.length}) ────────────────────────────`));
+    for (const cardId of cardIds) {
+      const cardDir = join(colDir, cardId);
+      if (inflight.has(col)) {
+        const c = waveCard(process.cwd(), cardDir, cardId, events);
+        const row = `  ${color("33", "▸")} ${trimCell(cardId, W)} stage ${trimCell(c.stage, 10)} role ${trimCell(c.role, 14)} gate ${trimCell(c.gate, 10)} ${c.outputs} out ${c.bytes}B`;
+        lines.push(row);
+        if (c.consult.length > 0) {
+          lines.push(color("90", "    └ consult:"));
+          for (const t of c.consult) {
+            const snippet = t.text.replace(/\s+/g, " ").slice(-120);
+            const voiceColor = t.by === "master" ? "36" : t.by === "critic" ? "90" : "35"; // summoned voices in magenta
+            lines.push(`        ${color(voiceColor, t.by + ">")} ${snippet}`);
+          }
+        }
+      } else {
+        lines.push(`  · ${trimCell(cardId, W)}`);
+      }
+    }
   }
-  return `backlog ${counts["backlog"]} │ in-progress ${counts["in-progress"]} │ review ${counts["review"]} │ done ${counts["done"]}`;
+  return lines;
 }
 
-export function renderWatch(): string {
+export function renderWatch(tail?: EventTail): string {
   const lines: string[] = [];
   lines.push(color("1;36", "╔══ BANDIT LIVE ═══════════════════════════════════════╗"));
 
@@ -126,46 +272,94 @@ export function renderWatch(): string {
     }
   }
 
-  // Card live progress (output file growth)
+  // THE WAVE: rows per column, stage/role/gate per in-flight card, last
+  // consult exchange under each in-flight card that has one.
   lines.push("");
-  lines.push(color("1;37", "── CARDS IN FLIGHT (output growth) ─────────────────"));
-  const progress = cardProgress();
-  if (progress.length === 0) {
-    lines.push("  (nothing in flight)");
-  } else {
-    for (const p of progress) {
-      lines.push(`  ${color("33", "▸")} ${p.card.slice(0, 40)} — ${p.outputs} output(s), ${p.bytes} B, last write ${p.lastModified}`);
-    }
-  }
+  lines.push(color("1;37", "── WAVE (stage/role/gate per in-flight card) ────────"));
+  const events = tail ? tail.events : [];
+  const rows = waveRows(events);
+  if (rows.length === 0) lines.push("  (board empty)");
+  else lines.push(...rows);
 
   lines.push("");
   lines.push(color("1;37", "── BOARD ────────────────────────────────────────────"));
-  lines.push("  " + boardLine());
+  const counts: Record<string, number> = {};
+  for (const col of COLUMNS) {
+    try { counts[col] = readdirSync(dir("board", col)).length; } catch { counts[col] = 0; }
+  }
+  lines.push(`  backlog ${counts["backlog"]} │ in-progress ${counts["in-progress"]} │ review ${counts["review"]} │ done ${counts["done"]}`);
 
+  // EVENTS (truth) — the tail's recent window (incremental, not a rescan)
   lines.push("");
   lines.push(color("1;37", "── EVENTS (truth) ──────────────────────────────────"));
-  const events = recentEvents();
-  if (events.length === 0) lines.push("  (no events yet)");
-  for (const e of events) {
-    lines.push(`  ${color("90", e.ts)} ${e.line}`);
+  const recent = (tail ? tail.events : []).slice(-12);
+  if (recent.length === 0) lines.push("  (no events yet)");
+  for (const e of recent) {
+    const payload = Object.entries(e).filter(([k]) => !["type", "ts"].includes(k)).map(([k, v]) => `${k}=${String(v).slice(0, 40)}`).join(" ");
+    lines.push(`  ${color("90", String(e.ts).slice(11, 19))} ${`${e.type} ${payload}`.slice(0, 110)}`);
   }
 
   lines.push(color("1;36", "╚════════════════════════════════════════════════════╝"));
   return lines.join("\n");
 }
 
-// `bandit watch` — clear + render + sleep, until Ctrl+C.
+// `bandit watch` — the streaming subscriber (Brigade shape): fs.watch on
+// .bandit/events/ + board columns drives an incremental append tail of
+// events/*.jsonl. On each append: drain only new bytes → render-on-append.
+// No poll repaint: renders fire on fs events (debounced), never on an
+// interval that re-renders unchanged state. Ctrl+C exits.
+
 export function watchLoop(intervalMs = 2000): () => void {
   let running = true;
-  const tick = async () => {
+  let dirty = true; // render once on start
+  let debounce: ReturnType<typeof setTimeout> | null = null;
+  const tail = new EventTail();
+
+  const render = () => {
+    debounce = null;
     if (!running) return;
+    tail.drain(); // incremental: only bytes appended since last render
     process.stdout.write("\x1b[2J\x1b[H"); // clear
-    process.stdout.write(renderWatch() + "\n");
+    process.stdout.write(renderWatch(tail) + "\n");
   };
-  const timer = setInterval(tick, intervalMs);
-  void tick();
+
+  // Coalesce fs event bursts into one render (append storms). The debounce
+  // timer is NOT a poll: it renders only after an fs event marked dirty;
+  // an idle board renders nothing.
+  const markDirty = () => {
+    if (!running || debounce) return;
+    debounce = setTimeout(render, Math.min(intervalMs, 250));
+  };
+
+  const watchers: { close(): void }[] = [];
+  // subscribe: events dir (the tail) + board columns (card moves/growth)
+  for (const d of [dir("events"), ...COLUMNS.map((c) => dir("board", c))]) {
+    try {
+      const w = watch(d, { persistent: true }, markDirty);
+      w.on("error", () => {}); // a deleted dir must not crash the watch
+      watchers.push(w);
+    } catch {}
+  }
+
+  render(); // first render on start (initial full drain)
   return () => {
     running = false;
-    clearInterval(timer);
+    for (const w of watchers) { try { w.close(); } catch {} }
+    if (debounce) clearTimeout(debounce);
   };
 }
+
+export function renderWatchForTests(root: string, events: WaveEvent[]): string {
+  const prev = process.cwd();
+  process.chdir(root);
+  try {
+    const tail = new EventTail();
+    tail.events = events;
+    return renderWatch(tail);
+  } finally {
+    process.chdir(prev);
+  }
+}
+
+// fstatSync is used for tail cursor bookkeeping in future revisions.
+void fstatSync;

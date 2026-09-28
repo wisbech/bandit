@@ -89,6 +89,17 @@ describe("V3-0: runner composition", () => {
     expect(red.fingerprint).toBeDefined();
   });
 
+  test("gate strips markdown backticks from VERIFICATION_COMMAND", () => {
+    const wrapped = parseGate(
+      "Work done.\nVERIFICATION_COMMAND: `grep -c 'probe-quants' consult.md`\nVERIFICATION_EXIT_CODE: 0\nVERIFICATION_OUTPUT: 4",
+    );
+    expect(wrapped.command).toBe("grep -c 'probe-quants' consult.md");
+    expect(wrapped.command).not.toContain("`");
+    // bold-wrapped is also normalized; inner backticks are left intact
+    const bold = parseGate("VERIFICATION_COMMAND: **bun test**\nVERIFICATION_EXIT_CODE: 0");
+    expect(bold.command).toBe("bun test");
+  });
+
   test("unchanged red gate gets fingerprinted and re-detected", () => {
     const cardDir = join(root, ".bandit", "board", "in-progress", "fp-card");
     mkdirSync(cardDir, { recursive: true });
