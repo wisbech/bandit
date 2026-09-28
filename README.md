@@ -1,8 +1,10 @@
 # bandit
 
 <p align="center">
-  <img src="docs/bandit-icon.png" alt="bandit — the agent factory" width="380">
+  <a href="https://wisbech.github.io/bandit/"><img src="docs/bandit-icon.png" alt="bandit — the agent factory" width="380"></a>
 </p>
+
+<p align="center"><a href="https://wisbech.github.io/bandit/"><strong>wisbech.github.io/bandit</strong></a></p>
 
 **The agent factory.** A dark factory where AI coding agents execute work on a kanban board, an adversarial critic enforces quality, and every claim is backed by verification evidence — not vibes.
 
