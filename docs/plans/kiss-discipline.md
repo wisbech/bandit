@@ -40,7 +40,7 @@ Goodhart boundaries, restated once (they are the non-negotiables):
 | MoE gating on reward weights | forest scores exist and are calibrated |
 | Hierarchical credit (lever×expert×route) | joint learning is real, composites as independent arms until then |
 | Held-out divergence channel (every N cards) | proxy-vs-true disagreement observed ≥2 times manually |
-| Per-criterion structured seat (decomposed criterion grading) | grading disagreements with the gate ≥2 occurrences, logged | trigger MET 2026-09-28: `grader.gate_contradiction` fired 3× on one card (dogfood) — seat passed 0.98/0.95/0.9 while gate red. Unfreeze: seat must read the full artifact surface (actor output **+ consult.md** — the summon probe exposed that thread-lived acceptance criteria are invisible to grading) |
+| Per-criterion structured seat (decomposed criterion grading) | ~~grading disagreements ≥2~~ **BUILT 2026-09-28** — seat now reads actor output + consult.md, answers per criterion (CRITERIA: lines), events carry criteriaLines; thread-lived criteria are gradable |
 | Grader calibration loop (seat verdict vs eventual gate outcome) | enough grading records to compute agreement (≥20 cards) — the contradiction events above are the first 3 data points |
 
 **Corollary — the anti-overfit rule for building:** every mechanism in §2 was preceded by a concrete incident. Nothing in §3 may be built because it would be *nice*, or because a paper recommends it, or because a repo does it. Deer-flow's restraint policy is the template: *"Sub-agents are an optimization, not the default response."* Mechanisms are optimizations, not the default response to complexity.

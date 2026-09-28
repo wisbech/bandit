@@ -640,14 +640,21 @@ export interface SelfVerifyResult {
   timedOut: boolean;
   outputBytes: number;
   outputPath?: string;
+  container?: boolean; // verification ran inside the declared container (invariant #5)
 }
 
-export async function selfVerifyGateAsync(gate: GateResult, cardDir: string, timeoutMs = 300_000): Promise<SelfVerifyResult> {
+export async function selfVerifyGateAsync(gate: GateResult, cardDir: string, timeoutMs = 300_000, container?: string): Promise<SelfVerifyResult> {
   const result: SelfVerifyResult = { attempted: false, command: gate.command, reportedExitCode: gate.exitCode, timedOut: false, outputBytes: 0 };
   if (!gate.command) return result;
   result.attempted = true;
   const logPath = join(cardDir, "verification-output.log");
-  const wrapped = `{ ${gate.command} ; } 2>&1 | tee "${logPath}" ; exit \${PIPESTATUS[0]}`;
+  // Container enforcement (invariant #5, now actually enforced): when the
+  // factory declares a verification container, the re-run goes THROUGH it —
+  // docker exec. Before this, verificationContainer was advertised config
+  // that the gate silently ignored (the enforcement-is-social bug class).
+  const baseCommand = container ? containerStage(gate.command, container) : gate.command;
+  result.container = Boolean(container);
+  const wrapped = `{ ${baseCommand} ; } 2>&1 | tee "${logPath}" ; exit \${PIPESTATUS[0]}`;
   // Re-run from the PROJECT ROOT, not the card folder: acceptance commands are
   // written against the project (bun test, pytest, …). Running them from
   // .bandit/board/<col>/<card>/ fails on cwd — the false red that burned
@@ -798,7 +805,7 @@ export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult;
   // self-verification stage: trust nothing, re-run the reported command
   let selfVerify: SelfVerifyResult | undefined;
   if (gate.command) {
-    selfVerify = await selfVerifyGateAsync(gate, opts.cardDir);
+    selfVerify = await selfVerifyGateAsync(gate, opts.cardDir, 300_000, opts.container);
     if (selfVerify.actualExitCode !== undefined) {
       gate.exitCode = selfVerify.actualExitCode;
       gate.green = selfVerify.actualExitCode === 0;

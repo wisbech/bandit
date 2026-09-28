@@ -46,18 +46,27 @@ function ensureScaffold(): void {
 
 // The classifier seat's prompt — a constant, not a template file. Grading is
 // a function; functions don't have identities.
-const GRADER_PROMPT = `Grade this output against the task's acceptance criteria, criterion by criterion.
+// The seat grades per acceptance criterion — a criterion answered in the
+// consult thread is as real as one answered in the run output (the unfreeze:
+// kiss-discipline.md, trigger MET 2026-09-28 — 3 grader/gate contradictions
+// on one card). {{card.acceptance}} lists each criterion with an index;
+// the reply must include a CRITERIA block scoring each one.
+const GRADER_PROMPT = `Grade the work against EVERY acceptance criterion below, one line each.
 
 TASK:
 {{card.task}}
 
-OUTPUT:
-{{actor.output}}
+ACCEPTANCE CRITERIA:
+{{card.acceptance}}
 
+ACTOR OUTPUT:
+{{actor.output}}
+{{consultThread}}
 Answer with ONLY:
+CRITERIA: <one line per criterion, same order, format "- <index>: pass|fail|uncertain — <evidence>">
 VERDICT: pass | fail | uncertain
 CONFIDENCE: 0.0 to 1.0
-REASONING: <per-criterion evidence>`;
+REASONING: <the criterion lines that decided it>`;
 
 function gradeDir(): string {
   const gd = join(dir("grading"));
@@ -162,12 +171,20 @@ export function parseCriticVerdict(text: string): CriticVerdict {
 
 // The classifier seat: no serf folder, no identity render — one cheap call
 // from the fixed GRADER_PROMPT constant, parsed by parseCriticVerdict.
-async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string, maxRepairTurns = 2): Promise<{ verdict: CriticVerdict; verdictPath: string | null }> {
+// Thread-visible (the 2026-09-28 unfreeze): the consult thread is in the
+// prompt when it exists, so criteria satisfied in-thread are gradable — and
+// the per-criterion CRITERIA lines are parsed alongside the verdict.
+async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string, maxRepairTurns = 2): Promise<{ verdict: CriticVerdict; verdictPath: string | null; criteria: string | null }> {
   const { packObservation, runTransport } = await import("./runner");
   const packed = packObservation(actorOutput, card.dir, "actor-output");
+  const threadPath = consultPath(card.dir);
+  const thread = existsSync(threadPath) ? readConsultThread(card.dir).slice(0, 3000) : "";
+  const threadBlock = thread ? "\nCONSULT THREAD (arguments and decisions so far — a criterion satisfied in-thread with evidence counts as satisfied):\n" + thread + "\n" : "";
   const prompt = GRADER_PROMPT
     .replace(/\{\{card\.task\}\}/g, card.body.slice(0, 2000))
-    .replace(/\{\{actor\.output\}\}/g, packed.text.slice(0, packed.archived ? 6000 : 3000));
+    .replace(/\{\{card\.acceptance\}\}/g, (card.body.match(/## Acceptance\n([\s\S]*?)(?=\n## |$)/)?.[1] ?? "- verification command passes").slice(0, 1500))
+    .replace(/\{\{actor\.output\}\}/g, packed.text.slice(0, packed.archived ? 6000 : 3000))
+    .replace(/\{\{consultThread\}\}/g, threadBlock);
 
   let text = "";
   let verdict: CriticVerdict | null = null;
@@ -181,16 +198,19 @@ async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string,
     verdict = parseCriticVerdict(text);
     if (!verdict.plumbing) break;
     // feed the specific failure back: "your last reply used the wrong format —
-    // answer with ONLY the VERDICT:/CONFIDENCE:/REASONING: block"
-    repairHint = `\n\nIMPORTANT — your previous reply was not parseable. ${verdict.reasoning} Reply with ONLY these three lines and nothing else:\nVERDICT: pass|fail|uncertain\nCONFIDENCE: 0.0-1.0\nREASONING: <evidence>`;
+    // answer with ONLY the CRITERIA:/VERDICT:/CONFIDENCE:/REASONING: block"
+    repairHint = `\n\nIMPORTANT — your previous reply was not parseable. ${verdict.reasoning} Reply with ONLY these lines and nothing else:\nCRITERIA: <one line per criterion>\nVERDICT: pass|fail|uncertain\nCONFIDENCE: 0.0-1.0\nREASONING: <evidence>`;
     emit("critic.repair", { card: card.id, turn });
   }
 
   const final = verdict ?? { verdict: "uncertain" as const, confidence: 0, reasoning: "grader plumbing after repairs", plumbing: true };
   // Track record: calibration data for the refiner — .bandit/grading/.
+  // Per-criterion lines ride along: seat-vs-gate agreement becomes measurable
+  // per criterion, which is the calibration loop's first data.
+  const criteria = (text.match(/CRITERIA:[\s\S]*?(?=\nVERDICT:|$)/i)?.[0] ?? "").trim() || null;
   const verdictPath = join(gradeDir(), `${card.id}.md`);
-  writeFileSync(verdictPath, `VERDICT: ${final.verdict}\nCONFIDENCE: ${final.confidence}\nREASONING: ${final.reasoning}\n`);
-  return { verdict: final, verdictPath };
+  writeFileSync(verdictPath, `VERDICT: ${final.verdict}\nCONFIDENCE: ${final.confidence}\nREASONING: ${final.reasoning}\n${criteria ?? ""}\n`);
+  return { verdict: final, verdictPath, criteria };
 }
 
 // ── THE CONSULT THREAD (critic as the master's peer, present from problem-start) ──
@@ -669,8 +689,8 @@ async function convergeCard(
     }
 
     // Critic evaluates (on green output) or TRIAGES (on red — cheap redirect).
-    const { verdict, verdictPath } = await runCritic(config, parseCard(currentCardDir), lastOutput);
-    emit("critic.verdict", { card: card.id, round, verdict: verdict.verdict, confidence: verdict.confidence, plumbing: verdict.plumbing, verdictPath });
+    const { verdict, verdictPath, criteria } = await runCritic(config, parseCard(currentCardDir), lastOutput);
+    emit("critic.verdict", { card: card.id, round, verdict: verdict.verdict, confidence: verdict.confidence, plumbing: verdict.plumbing, verdictPath, criteriaLines: criteria ? criteria.split("\n").filter((l) => /^\s*-\s/.test(l)).length : 0 });
     if (verdict.plumbing) {
       emit("critic.bypass", { card: card.id, round, reason: "plumbing-unparseable after repair" });
     }
@@ -792,7 +812,8 @@ async function convergeCard(
       "CONSULT (routing) — the card failed all convergence rounds. You have the thread below: " +
       "the critic's plan argument and, if it fired, the stagnation consult. Decide the route: " +
       "retry with an amended plan, spawn a specialist, or escalate to a human. " +
-      "End with one line DECISION: proceed | amend | specialist | escalate.\n\n" +
+      "End with one line DECISION: proceed | amend | specialist | escalate. " +
+      "If specialist, the SAME line must carry the capability: DECISION: specialist: <capability>.\n\n" +
       (thread ? "THREAD SO FAR:\n" + thread.slice(0, 4000) + "\n\n" : "") +
       "CARD:\n" + liveCard.body.slice(0, 1200) + "\n\nLAST GATE FAILURE:\n" + (lastFailedCapability ?? "none cited");
     appendConsultTurn(currentDir, { by: "master", text: "ROUTING: card failed " + maxRetries + " rounds. Decide: retry / specialist / escalate. End with DECISION line." });
@@ -802,7 +823,9 @@ async function convergeCard(
     const route = parseConsultDecision(masterReply);
     emit("consult.routed", { card: card.id, decision: route });
     if (route === "specialist") {
-      const capability = masterReply.match(/specialist:\s*([A-Za-z0-9 _-]{2,60})/i)?.[1]?.trim() ?? lastFailedCapability ?? "unknown";
+      const capability = masterReply.match(/DECISION:\s*specialist:?\s*:?\s*([A-Za-z0-9 _-]{2,60})/i)?.[1]?.trim()
+        ?? masterReply.match(/specialist:\s*([A-Za-z0-9 _-]{2,60})/i)?.[1]?.trim()
+        ?? lastFailedCapability ?? "capability-unspecified";
       const specialistName = "specialist-" + slugify(capability).slice(0, 24) + "-" + Date.now().toString(36).slice(-4);
       const { registerChild } = await import("./bandit");
       registerChild(config.root, "actor", "specialists/" + specialistName, {
