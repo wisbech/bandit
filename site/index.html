@@ -58,7 +58,13 @@
   .lede { color: var(--cream-dim); max-width: 660px; font-size: 16px; }
 
   .installcard { background: var(--ink-2); border: 1px solid var(--line); margin-top: 36px; }
-  .installcard .bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); color: var(--faint); font-size: 13px; }
+  .installcard .bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); color: var(--faint); font-size: 13px; }
+  .copybtn { background: transparent; border: 1px solid var(--faint); color: var(--faint); font: inherit; font-size: 12px; padding: 3px 10px; cursor: pointer; transition: color .15s, border-color .15s; border-radius: 0; }
+  .copybtn:hover { color: var(--orange); border-color: var(--orange); }
+  .copybtn.done { color: var(--ok); border-color: var(--ok); }
+  .cmdrow { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid rgba(248,240,224,0.05); }
+  .cmdrow:last-child { border-bottom: 0; }
+  .cmdrow code { flex: 1; background: transparent; padding: 0; font-size: 13px; white-space: pre-wrap; word-break: break-all; }
   .installcard pre { border: 0; margin: 0; padding: 20px; }
   pre { background: var(--ink-2); border: 1px solid var(--line); padding: 20px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; color: var(--cream); margin-top: 24px; }
   pre .c { color: var(--faint); } /* comments */
@@ -102,6 +108,7 @@
       <a href="#why">Why</a>
       <a href="#how">How it works</a>
       <a href="#daily">Daily use</a>
+      <a href="#start">Start</a>
       <a href="#credits">Lineage</a>
     </nav>
     <a class="cta" href="https://github.com/wisbech/bandit">GitHub</a>
@@ -113,42 +120,20 @@
     <h1>AI agents do the work.<br>The factory makes it <em>evidence</em>.</h1>
     <p class="lede">bandit runs your existing coding agents — opencode, Claude Code, Codex, pi — on a kanban board with a mechanical verify gate, a consult thread that argues before it executes, and a ledger that remembers what actually worked.</p>
     <div class="heroCtas">
-      <a class="btn primary" href="#install">Install in five commands</a>
-      <a class="btn" href="#agent">Or let your agent do it</a>
+      <a class="btn primary" href="#agent">Let your agent do it</a>
+      <a class="btn" href="#install">Or five commands by hand</a>
       <a class="btn" href="https://github.com/wisbech/bandit">Source</a>
     </div>
   </div>
 
-  <section id="install">
+  <section id="agent" style="border-top:0">
     <div class="wrap">
-      <p class="num"><b>01 /</b> INSTALL</p>
-      <h2>Five commands, one dependency.</h2>
-      <p class="lede">Bun is the only requirement. Your agents bring their own auth — bandit never sees or stores provider keys.</p>
+      <p class="num"><b>01 /</b> AGENT INSTALL (RECOMMENDED)</p>
+      <h2>Let the agent install it.</h2>
+      <p class="lede">Setup involves harness selection, model routing, and loop verification — an agent reads the full guide and walks every step without fat-fingering paths. Paste this into Claude Code, opencode, Codex, or any agent session:</p>
       <div class="installcard">
-        <div class="bar"><span>terminal</span><span>macOS / Linux</span></div>
-        <pre><span class="c"># 1. get bandit (Bun ≥ 1.4 is the only dependency)</span>
-git clone https://github.com/wisbech/bandit.git && cd bandit && bun install && bun run build
-sudo ln -sf <span class="p">$PWD</span>/bin/bandit.js /usr/local/bin/bandit
-
-<span class="c"># 2. turn your project into a factory</span>
-<span class="p">$</span> cd your-project && bandit init
-
-<span class="c"># 3. add a card (work = a card with acceptance criteria, not a chat)</span>
-<span class="p">$</span> bandit task "write a hello world module" <span class="o">--accept</span> "module prints HELLO_WORLD"
-
-<span class="c"># 4. run the factory (drains the board once; omit --once to watch forever)</span>
-<span class="p">$</span> bandit start --once
-
-<span class="c"># 5. prove it — nine health checks, exit 1 on failure</span>
-<span class="p">$</span> bandit doctor && bandit watch</pre>
-      </div>
-      <div class="grid2">
-        <div class="card"><h3>Local models, zero cloud tokens</h3><p>The default config drives opencode through ollama (<code>ollama/glm-5.3-flash:cloud</code>). The full loop — actor, gate, grader, consults — runs without a single API key.</p></div>
-        <div class="card"><h3>Or your existing subscriptions</h3><p>Point the transport at Claude Code or Codex via ACP profiles; they use their own logins. <code>bandit harnesses add</code> registers any Anthropic-protocol endpoint (LiteLLM, gateways, ollama).</p></div>
-      </div>
-
-      <div class="installcard" id="agent" style="margin-top:14px">
-        <div class="bar"><span>for LLM agents — paste this into Claude Code, opencode, Codex, or any agent session</span><span>the agent reads the guide and walks every step</span></div>
+        <div class="bar"><span>prompt</span><span>any LLM agent</span><button class="copybtn" data-copy="Install and configure bandit by following the instructions here:
+https://raw.githubusercontent.com/wisbech/bandit/main/docs/installation.md" aria-label="Copy prompt">copy</button></div>
         <pre>Install and configure bandit by following the instructions here:
 https://raw.githubusercontent.com/wisbech/bandit/main/docs/installation.md
 
@@ -162,12 +147,44 @@ https://raw.githubusercontent.com/wisbech/bandit/main/docs/installation.md
 <span class="c">#   step 5  seed a hello-world card, bandit start --once, read the dossier back</span>
 <span class="c">#   step 6  hand you the command list — board / card / watch / chat / events</span></pre>
       </div>
+
+      <div class="grid2">
+        <div class="card"><h3>Why delegate the install</h3><p>Subscription detection, model selection across agents and categories, provider auth, config migration — humans fat-finger these; the agent verifies with <code>bandit doctor</code> after each step.</p></div>
+        <div class="card"><h3>Local models, zero cloud tokens</h3><p>The default config drives opencode through ollama (<code>ollama/glm-5.3-flash:cloud</code>). The full loop — actor, gate, grader, consults — runs without a single API key. Or point the transport at Claude/Codex via ACP and use your existing login.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <p class="num"><b>02 /</b> MANUAL INSTALL</p>
+      <h2>Five commands, one dependency.</h2>
+      <p class="lede">Bun ≥ 1.4 is the only requirement. Your agents bring their own auth — bandit never sees or stores provider keys.</p>
+      <div class="installcard">
+        <div class="bar"><span>terminal</span><span>macOS / Linux</span><button class="copybtn" data-copy="git clone https://github.com/wisbech/bandit.git && cd bandit && bun install && bun run build
+sudo ln -sf $PWD/bin/bandit.js /usr/local/bin/bandit
+cd your-project && bandit init
+bandit task "write a hello world module" --accept "module prints HELLO_WORLD"
+bandit start --once
+bandit doctor && bandit watch" aria-label="Copy all commands">copy all</button></div>
+        <div class="cmdrow"><code>git clone https://github.com/wisbech/bandit.git && cd bandit && bun install && bun run build</code><button class="copybtn" aria-label="Copy command">copy</button></div>
+<div class="cmdrow"><code>sudo ln -sf $PWD/bin/bandit.js /usr/local/bin/bandit</code><button class="copybtn" aria-label="Copy command">copy</button></div>
+<div class="cmdrow"><code>cd your-project && bandit init</code><button class="copybtn" aria-label="Copy command">copy</button></div>
+<div class="cmdrow"><code>bandit task "write a hello world module" --accept "module prints HELLO_WORLD"</code><button class="copybtn" aria-label="Copy command">copy</button></div>
+<div class="cmdrow"><code>bandit start --once</code><button class="copybtn" aria-label="Copy command">copy</button></div>
+<div class="cmdrow"><code>bandit doctor && bandit watch</code><button class="copybtn" aria-label="Copy command">copy</button></div>
+      </div>
+      <div class="grid2">
+        <div class="card"><h3>Local models, zero cloud tokens</h3><p>The default config drives opencode through ollama (<code>ollama/glm-5.3-flash:cloud</code>). The full loop — actor, gate, grader, consults — runs without a single API key.</p></div>
+        <div class="card"><h3>Or your existing subscriptions</h3><p>Point the transport at Claude Code or Codex via ACP profiles; they use their own logins. <code>bandit harnesses add</code> registers any Anthropic-protocol endpoint (LiteLLM, gateways, ollama).</p></div>
+      </div>
+
     </div>
   </section>
 
   <section id="why">
     <div class="wrap">
-      <p class="num"><b>02 /</b> WHY</p>
+      <p class="num"><b>03 /</b> WHY</p>
       <h2>Agents are powerful and unmanaged.</h2>
       <p class="lede">You babysit one session at a time, paste context by hand, and trust output nobody verified. bandit is the management layer: work becomes cards, claims become measurements, arguments become a record.</p>
       <div class="grid2">
@@ -181,7 +198,7 @@ https://raw.githubusercontent.com/wisbech/bandit/main/docs/installation.md
 
   <section id="how">
     <div class="wrap">
-      <p class="num"><b>03 /</b> HOW IT WORKS</p>
+      <p class="num"><b>04 /</b> HOW IT WORKS</p>
       <h2>Three organs, one boundary.</h2>
       <p class="lede">Measure, argue, decide — held by different organs so none can grade its own homework. The boundary exists because of <a href="https://arxiv.org/abs/2310.09144">Goodhart's law in RL</a>: optimization pressure corrupts whatever it can reshape.</p>
       <table>
@@ -202,7 +219,7 @@ https://raw.githubusercontent.com/wisbech/bandit/main/docs/installation.md
 
   <section id="daily">
     <div class="wrap">
-      <p class="num"><b>04 /</b> DAILY USE</p>
+      <p class="num"><b>05 /</b> DAILY USE</p>
       <h2>The commands you'll actually type.</h2>
       <table>
         <tr><th>Command</th><th>What it does</th><th>When</th></tr>
@@ -222,7 +239,7 @@ https://raw.githubusercontent.com/wisbech/bandit/main/docs/installation.md
 
   <section id="credits">
     <div class="wrap">
-      <p class="num"><b>05 /</b> LINEAGE</p>
+      <p class="num"><b>06 /</b> LINEAGE</p>
       <h2>What bandit steals from, and gives back.</h2>
       <p class="lede">bandit is third-generation: two prior serf harnesses ran in daily production for years before it. The rest is cited appropriation — read the research, take the mechanism, name the source.</p>
       <table>
@@ -258,6 +275,29 @@ https://raw.githubusercontent.com/wisbech/bandit/main/docs/installation.md
       </div>
     </div>
   </section>
+  <section id="start">
+    <div class="wrap">
+      <p class="num"><b>07 /</b> START</p>
+      <h2>Keep your agents. Change the factory.</h2>
+      <p class="lede">bandit wraps whatever harness answers the prompt — local ollama at zero cost, or your existing Claude/opencode/Codex login.</p>
+      <div class="installcard">
+        <div class="bar"><span>terminal</span><span>first run, start to finish</span><button class="copybtn" data-copy="cd your-project
+bandit init
+bandit task "write a hello world module" --accept "module prints HELLO_WORLD"
+bandit start --once
+bandit doctor
+bandit card $(bandit board | grep -oE '[a-z0-9-]+' | head -1)
+bandit watch" aria-label="Copy first-run sequence">copy all</button></div>
+        <div class="cmdrow"><code>cd your-project && bandit init</code><button class="copybtn" aria-label="Copy command">copy</button></div>
+        <div class="cmdrow"><code>bandit task "write a hello world module" --accept "module prints HELLO_WORLD"</code><button class="copybtn" aria-label="Copy command">copy</button></div>
+        <div class="cmdrow"><code>bandit start --once</code><button class="copybtn" aria-label="Copy command">copy</button></div>
+        <div class="cmdrow"><code>bandit doctor</code><button class="copybtn" aria-label="Copy command">copy</button></div>
+        <div class="cmdrow"><code>bandit card &lt;id&gt;</code><button class="copybtn" aria-label="Copy command">copy</button></div>
+        <div class="cmdrow"><code>bandit watch</code><button class="copybtn" aria-label="Copy command">copy</button></div>
+      </div>
+      <p style="margin-top:28px"><a class="btn primary" href="https://github.com/wisbech/bandit/blob/main/docs/installation.md">Full installation guide</a> <a class="btn" href="https://github.com/wisbech/bandit">Source on GitHub</a></p>
+    </div>
+  </section>
 </main>
 
 <footer>
@@ -271,5 +311,38 @@ https://raw.githubusercontent.com/wisbech/bandit/main/docs/installation.md
     <p>© 2026 bandit — MIT. A serf is a folder. A card is a folder. Events are the truth.</p>
   </div>
 </footer>
+<script>
+(function () {
+  // Copy buttons: data-copy attr wins (multi-line), else the sibling row's code text.
+  function bind(btn) {
+    btn.addEventListener("click", function () {
+      var text = btn.getAttribute("data-copy");
+      if (!text) {
+        var row = btn.closest(".cmdrow");
+        var code = row && row.querySelector("code");
+        text = code ? code.textContent : "";
+      }
+      if (!text) return;
+      var done = function () {
+        var prev = btn.textContent;
+        btn.textContent = "copied ✓";
+        btn.classList.add("done");
+        setTimeout(function () { btn.textContent = prev; btn.classList.remove("done"); }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { fallback(text, done); });
+      } else { fallback(text, done); }
+    });
+  }
+  function fallback(text, cb) {
+    var ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); cb(); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+  document.querySelectorAll(".copybtn").forEach(bind);
+})();
+</script>
 </body>
 </html>
