@@ -135,3 +135,5 @@ The desk scoreboard is unchanged (0.98 / 9.7% / 16.4%) because adoption has not 
 8. **HRP sizing probe** and **daily GEX instrument** (TFD cards) per the discussion of 30 Sep: the first because card 13's equal-weight diversification failed and card 16 built the cluster tree; the second as a recorded instrument for the regime veto, not a backtestable lever.
 
 **Not asked for by the numbers:** Thompson governor, consult debate, specialist execution, per-criterion calibration, bandit forest, any new organ.
+
+**Post-run cleanup by hand (John's call, 2026-09-30):** `agent.py` reverted; `wheel.py`, `put_spread.py` and their tests moved into the requeued cards' folders under `leftover/`; converged work committed to TFD `master` and pushed. Three hand actions on the working tree, still zero on the board. These are exactly what failed-card isolation (next step 3) would have made unnecessary.
