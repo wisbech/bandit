@@ -221,7 +221,7 @@ Recursion is structural: a factory spawns child factories the way serfs spawn ch
 
 ## Tests
 
-89 tests, one command, no mocks of convenience — real stub transports, real card folders:
+103 tests, one command, no mocks of convenience — real stub transports, real card folders:
 
 ```bash
 bun test
