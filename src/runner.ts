@@ -36,6 +36,8 @@ export interface RunResult {
   ok: boolean;
   output: string;
   tokensUsed: number;
+  exitCode?: number;  // harness process exit (-1 = killed by bandit)
+  stalled?: boolean;  // killed for idling or run timeout
 }
 
 // ── CARD PARSING (card-as-folder) ──
@@ -310,6 +312,10 @@ export async function runTransport(cfg: TransportConfig, prompt: string, cwd: st
         resolve({ stdout: collected, exitCode: code, stalled: false });
       });
     });
+    // stderr is the only place a harness explains an early exit (auth, rate limit,
+    // crash). Drain it (a full pipe would block the child) and keep it beside the run.
+    const stderr = await Promise.race([new Response(proc.stderr).text(), new Promise<string>((r) => setTimeout(() => r(""), 2_000))]).catch(() => "");
+    if (stderr.trim()) writeFileSync(outputPath.replace(/\.md$/, ".stderr.log"), stderr);
 
     // The final output file: for streamed (json) runs, events land in the file
     // as they arrive; convert to the plain text the gate/parser expects.
@@ -319,11 +325,11 @@ export async function runTransport(cfg: TransportConfig, prompt: string, cwd: st
       writeFileSync(outputPath.replace(/\.md$/, ".events.jsonl"), result.stdout);
       writeFileSync(outputPath, text);
       clearTimeout(timer);
-      return { ok: !result.stalled && result.exitCode === 0, output: text, tokensUsed: tokens > 0 ? tokens : Math.ceil(text.length / 4) };
+      return { ok: !result.stalled && result.exitCode === 0, output: text, tokensUsed: tokens > 0 ? tokens : Math.ceil(text.length / 4), exitCode: result.exitCode, stalled: result.stalled };
     }
     clearTimeout(timer);
     writeFileSync(outputPath, result.stdout);
-    return { ok: !result.stalled && result.exitCode === 0, output: result.stdout, tokensUsed: Math.ceil(result.stdout.length / 4) };
+    return { ok: !result.stalled && result.exitCode === 0, output: result.stdout, tokensUsed: Math.ceil(result.stdout.length / 4), exitCode: result.exitCode, stalled: result.stalled };
   }
   if (cfg.kind === "uhp") {
     // UHP: cfg.command = base url, cfg.args[0] = model, cfg.args[1] = api key (optional)

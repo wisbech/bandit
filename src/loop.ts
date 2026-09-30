@@ -689,7 +689,7 @@ async function convergeCard(
       // fail-closed: actor-proposed command, no card verify, no container — never run on the host
       emit("verification.unverifiable", { card: card.id, round, reported: gate.reported });
     } else {
-      emit(green ? "verification.green" : "verification.red", { card: card.id, round, command: gate.command, reported: gate.reported, selfVerified: selfVerify?.attempted ?? false, cardOwned: selfVerify?.cardOwned ?? false });
+      emit(green ? "verification.green" : "verification.red", { card: card.id, round, command: gate.command, reported: gate.reported, selfVerified: selfVerify?.attempted ?? false, cardOwned: selfVerify?.cardOwned ?? false, actorExit: run.exitCode, actorStalled: run.stalled ?? false, actorBytes: run.output.length });
     }
 
     // ── Decision-port round gate (fail-closed: no evaluator → no questions) ──
