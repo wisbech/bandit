@@ -49,6 +49,8 @@ Roughly 80 lines. Skip it and Phase 2 runs with the operator watching, not overn
 
 **Rules.** Nobody touches the board by hand. Every human intervention goes through `bandit reopen <id> --reason "<text>"`, which emits `card.moved` with `by: "hand"` through `emit()`. That event count is the headline number.
 
+`bandit reopen` exists (src/cli.ts `reopen` → `reopenCard` in src/loop.ts); `--reason` is required and the card may be in any column.
+
 **Metrics, all from existing events:**
 
 | Metric | Computed from |

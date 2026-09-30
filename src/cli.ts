@@ -242,6 +242,24 @@ const COMMANDS: Command[] = [
     },
   },
   {
+    name: "reopen",
+    summary: 'move a card back to backlog: bandit reopen <card-id> --reason "<text>"',
+    fn: async (args) => {
+      if (!existsSync(banditDir())) fail("no .bandit/");
+      const id = args[0];
+      const ri = args.indexOf("--reason");
+      const reason = ri >= 0 ? (args[ri + 1] ?? "") : "";
+      if (!id || id.startsWith("--") || !reason.trim()) fail('usage: bandit reopen <card-id> --reason "<text>"');
+      const { reopenCard } = await import("./loop");
+      try {
+        reopenCard(process.cwd(), id, reason);
+      } catch (e) {
+        fail(e instanceof Error ? e.message : String(e));
+      }
+      console.log(`  ✓ ${id} → backlog (by hand: ${reason})`);
+    },
+  },
+  {
     name: "board",
     summary: "show the kanban (--verbose folds in-flight card events + frontmatter)",
     fn: (args) => {

@@ -119,6 +119,16 @@ export function moveCard(card: CardFolder, to: (typeof COLUMNS)[number]): void {
   writeFileSync(cardMd, raw);
 }
 
+// Hand intervention: put a card back in backlog from any column, on the record.
+// The move is an event (by: "hand", with the reason), never a silent folder edit.
+export function reopenCard(root: string, id: string, reason: string): void {
+  if (!reason.trim()) throw new Error("--reason is required");
+  const cardDir = findCardDir(root, id);
+  if (!cardDir) throw new Error(`no card ${id} in any column`);
+  moveCard(parseCard(cardDir), "backlog");
+  emit("card.moved", { card: id, to: "backlog", by: "hand", reason });
+}
+
 // The loop's config root, set once per runLoop call (module-level because
 // moveCard is a projection helper).
 let _root: string | null = null;
