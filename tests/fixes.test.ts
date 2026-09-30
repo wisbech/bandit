@@ -83,3 +83,20 @@ describe("fix 2: wake reentrancy guard", () => {
     expect(cardsIn("in-progress").length).toBe(0);
   }, 25_000);
 });
+
+describe("fix 3: triage does not overwrite the grading record", () => {
+  test("grading/<card>.md holds the grade, not the triage reply", async () => {
+    seedCard("triage-keep");
+    const transport = writeStub("stub-triage.sh", [
+      "#!/bin/sh",
+      'case "$1" in',
+      '  *"TRIAGE:"*) echo "VERDICT: fail\\nCONFIDENCE: 0.9\\nREASONING: TRIAGE-MARKER missing: widget" ;;',
+      '  *) echo "work attempted\\nVERIFICATION_COMMAND: false\\nVERIFICATION_EXIT_CODE: 1\\nVERIFICATION_OUTPUT: nope\\nVERDICT: fail\\nCONFIDENCE: 0.9\\nREASONING: GRADE-MARKER" ;;',
+      "esac",
+    ].join("\n"));
+    await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 1 });
+    const grade = readFileSync(join(root, ".bandit", "grading", "triage-keep.md"), "utf-8");
+    expect(grade).toContain("GRADE-MARKER");
+    expect(grade).not.toContain("TRIAGE-MARKER");
+  });
+});

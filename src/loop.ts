@@ -174,7 +174,7 @@ export function parseCriticVerdict(text: string): CriticVerdict {
 // Thread-visible (the 2026-09-28 unfreeze): the consult thread is in the
 // prompt when it exists, so criteria satisfied in-thread are gradable — and
 // the per-criterion CRITERIA lines are parsed alongside the verdict.
-async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string, maxRepairTurns = 2): Promise<{ verdict: CriticVerdict; verdictPath: string | null; criteria: string | null }> {
+async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string, maxRepairTurns = 2, record = true): Promise<{ verdict: CriticVerdict; verdictPath: string | null; criteria: string | null }> {
   const { packObservation, runTransport } = await import("./runner");
   const packed = packObservation(actorOutput, card.dir, "actor-output");
   const threadPath = consultPath(card.dir);
@@ -208,6 +208,7 @@ async function runCritic(cfg: LoopConfig, card: CardFolder, actorOutput: string,
   // Per-criterion lines ride along: seat-vs-gate agreement becomes measurable
   // per criterion, which is the calibration loop's first data.
   const criteria = (text.match(/CRITERIA:[\s\S]*?(?=\nVERDICT:|$)/i)?.[0] ?? "").trim() || null;
+  if (!record) return { verdict: final, verdictPath: null, criteria };
   const verdictPath = join(gradeDir(), `${card.id}.md`);
   writeFileSync(verdictPath, `VERDICT: ${final.verdict}\nCONFIDENCE: ${final.confidence}\nREASONING: ${final.reasoning}\n${criteria ?? ""}\n`);
   return { verdict: final, verdictPath, criteria };
@@ -714,6 +715,8 @@ async function convergeCard(
       config,
       parseCard(currentCardDir),
       "TRIAGE: the actor's attempt did not pass. Answer: is this fixable by the actor (skill/execution), or is the card missing a prerequisite/external capability? Cite the specific missing artifact or capability.\n\nOUTPUT:\n" + lastOutput.slice(0, 2000),
+      2,
+      false,
     );
     const capabilityMatch = triage.verdict.reasoning.match(/missing[:\s]+([A-Za-z0-9 _-]{4,60})/i);
     const missingCapability = capabilityMatch?.[1]?.trim() ?? null;
