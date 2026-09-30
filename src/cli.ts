@@ -232,10 +232,13 @@ const COMMANDS: Command[] = [
         const err = validateVerifyCommand(verify);
         if (err) fail(`--verify: ${err}`);
       }
+      // --lever <name>: the ledger claim this card pulls (frontmatter `lever:`).
+      const leverIdx = args.indexOf("--lever");
+      const lever = leverIdx >= 0 ? (args[leverIdx + 1] ?? "").trim() : "";
       const id = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Date.now().toString(36)}`;
       const cardDir = join(banditDir(), "board", "backlog", id);
       mkdirSync(cardDir, { recursive: true });
-      writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${id}\ntitle: ${title}\n${verify !== undefined ? `verify: ${verify.trim()}\n` : ""}---\n# ${title}\n\n## Acceptance\n${accepts.map((a) => `- ${a}`).join("\n") || "- verification command passes"}\n`);
+      writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${id}\ntitle: ${title}\n${verify !== undefined ? `verify: ${verify.trim()}\n` : ""}${lever ? `lever: ${lever}\n` : ""}---\n# ${title}\n\n## Acceptance\n${accepts.map((a) => `- ${a}`).join("\n") || "- verification command passes"}\n`);
       const { emit } = await import("./loop");
       emit("card.created", { card: id, title });
       console.log(`  card: ${id}`);
@@ -956,7 +959,8 @@ const COMMANDS: Command[] = [
       // 7. BUDGETS sanity: any card over its own limit still on the frontier?
       const { cardsIn, readEvents } = await import("./loop");
       const frontier = [...cardsIn("backlog" as never), ...cardsIn("in-progress" as never)] as { id: string; frontmatter: Record<string, string> }[];
-      const stuck = frontier.filter((c) => parseInt(c.frontmatter.lifetimeTokensUsed ?? "0", 10) >= parseInt(c.frontmatter.budgetLimit ?? "0", 10));
+      // limit 0/absent = no budget (matches the loop's budgetExhausted), not "exhausted at zero"
+      const stuck = frontier.filter((c) => { const limit = parseInt(c.frontmatter.budgetLimit ?? "0", 10); return limit > 0 && parseInt(c.frontmatter.lifetimeTokensUsed ?? "0", 10) >= limit; });
       add("Budgets", stuck.length === 0, stuck.length === 0 ? "no frontier card over budget" : `budget-exhausted on frontier: ${stuck.map((c) => c.id).join(", ")} (start will skip them)`);
 
       // 8. EVENT FLOW: is the factory breathing?
