@@ -617,6 +617,10 @@ export function containerStage(command: string, container?: string): string {
 
 // ── THE COMPOSED RUNNER ──
 
+export function agentProfilePath(root: string, role: string): string {
+  return join(root, ".opencode", "agents", `${role}.md`);
+}
+
 export interface RunOptions {
   serfDir: string;
   cardDir: string;
@@ -789,7 +793,7 @@ export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult;
   // profile for this serf (.opencode/agents/<serf>.md), select it so the
   // harness enforces the serf's permission contract (critic read-only, etc.).
   // cardDir = <root>/.bandit/board/<col>/<card> → root is four levels up.
-  const agentProfile = join(opts.cardDir, "..", "..", "..", "..", ".opencode", "agents", `${serf.name}.md`);
+  const agentProfile = agentProfilePath(join(opts.cardDir, "..", "..", "..", ".."), serf.name);
   const transport = opts.transport.kind === "headless" && opts.transport.command === "opencode" && existsSync(agentProfile)
     ? { ...opts.transport, args: [...opts.transport.args, "--agent", serf.name] }
     : opts.transport;

@@ -643,7 +643,8 @@ const COMMANDS: Command[] = [
         // (.opencode/agents/<role>.md — per-project permission profile:
         // critic read-only, actor edit+bash, master deny sudo/rm-rf). The
         // profile is the YAML capability contract; the harness enforces it.
-        const roleArg = existsSync(join(banditDir(), ".opencode", "agents", `${role}.md`)) && (cfg.command ?? "opencode") === "opencode"
+        const { agentProfilePath } = await import("./runner");
+        const roleArg = existsSync(agentProfilePath(process.cwd(), role)) && (cfg.command ?? "opencode") === "opencode"
           ? ["--agent", role]
           : [];
         const tuiArgs = [...agentLaunch(cfg.command ?? "opencode", model, "tui"), ...roleArg];
