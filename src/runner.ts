@@ -199,7 +199,7 @@ export function resolveTransport(cfg: TransportConfig, root: string): TransportC
 // tool_use, tool_result, step_finish). Convert the event stream to the plain
 // text the gate/parser expects: concat the text parts; tool activity becomes
 // one line each so the transcript still shows what the agent DID.
-export function eventsToText(eventsJsonl: string): string {
+export function eventsToText(eventsJsonl: string): { text: string; tokens: number } {
   const lines: string[] = [];
   const tokens = { input: 0, output: 0 };
   for (const line of eventsJsonl.split("\n")) {
@@ -220,7 +220,7 @@ export function eventsToText(eventsJsonl: string): string {
     } catch {}
   }
   if (tokens.input + tokens.output > 0) lines.push(`[tokens: in=${tokens.input} out=${tokens.output}]`);
-  return lines.join("\n") + "\n";
+  return { text: lines.join("\n") + "\n", tokens: tokens.input + tokens.output };
 }
 
 // Run one prompt through the transport. Writes output to the card folder.
@@ -311,10 +311,10 @@ export async function runTransport(cfg: TransportConfig, prompt: string, cwd: st
     // The final output file: for streamed (json) runs, events land in the file
     // as they arrive; convert to the plain text the gate/parser expects.
     if (streamJson) {
-      const text = eventsToText(result.stdout);
+      const { text, tokens } = eventsToText(result.stdout);
       writeFileSync(outputPath, text);
       clearTimeout(timer);
-      return { ok: !result.stalled && result.exitCode === 0, output: text, tokensUsed: Math.ceil(text.length / 4) };
+      return { ok: !result.stalled && result.exitCode === 0, output: text, tokensUsed: tokens > 0 ? tokens : Math.ceil(text.length / 4) };
     }
     clearTimeout(timer);
     writeFileSync(outputPath, result.stdout);
