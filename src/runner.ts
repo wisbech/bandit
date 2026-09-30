@@ -216,7 +216,7 @@ export function eventsToText(eventsJsonl: string): { text: string; tokens: numbe
         const name = e.part?.tool ?? e.tool ?? "tool";
         lines.push(`[tool: ${name}]`);
       } else if (e.type === "step_finish") {
-        const t = e.tokens ?? {};
+        const t = e.part?.tokens ?? e.tokens ?? {}; // opencode 1.18 nests tokens under part
         tokens.input += Number(t.input ?? 0);
         tokens.output += Number(t.output ?? 0) + Number(t.reasoning ?? 0);
       }
@@ -315,6 +315,8 @@ export async function runTransport(cfg: TransportConfig, prompt: string, cwd: st
     // as they arrive; convert to the plain text the gate/parser expects.
     if (streamJson) {
       const { text, tokens } = eventsToText(result.stdout);
+      // keep the raw event stream beside the text: tool inputs/outputs are the only record of what the agent did
+      writeFileSync(outputPath.replace(/\.md$/, ".events.jsonl"), result.stdout);
       writeFileSync(outputPath, text);
       clearTimeout(timer);
       return { ok: !result.stalled && result.exitCode === 0, output: text, tokensUsed: tokens > 0 ? tokens : Math.ceil(text.length / 4) };
