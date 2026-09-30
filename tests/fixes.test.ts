@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { runLoop } from "../src/loop";
+import { runLoop, readEvents, cardsIn } from "../src/loop";
 import { seedDefaultFolders } from "./v30-helpers";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -50,4 +50,36 @@ describe("fix 1: plan phase runs once", () => {
     const prompts = readFileSync(log, "utf-8").split("@@PROMPT_END@@").filter((p) => p.trim().length > 0);
     expect(prompts.filter((p) => p.includes("PLAN_ONLY=true")).length).toBe(1);
   });
+});
+
+describe("fix 2: wake reentrancy guard", () => {
+  test("persistent mode processes each new card exactly once, including one that arrives mid-pass", async () => {
+    writeFileSync(join(root, ".bandit", "serfs", "actor", "prompt.md"), "ACTOR_MARK\nTASK: {{card.task}}\n\nReport VERIFICATION_COMMAND, VERIFICATION_EXIT_CODE, VERIFICATION_OUTPUT.");
+    const log = join(root, "prompts.log");
+    const transport = writeStub("stub-slow.sh", [
+      "#!/bin/sh",
+      `printf '%s\\n@@PROMPT_END@@\\n' "$1" >> "${log}"`,
+      "sleep 0.3",
+      'echo "work done\\nVERIFICATION_COMMAND: true\\nVERIFICATION_EXIT_CODE: 0\\nVERIFICATION_OUTPUT: ok"',
+    ].join("\n"));
+    const cfg: Parameters<typeof runLoop>[0] = { root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 1 };
+    void runLoop(cfg); // persistent: never resolves
+    await Bun.sleep(300);
+    seedCard("wake-a");
+    await Bun.sleep(10);
+    seedCard("wake-b");
+    await Bun.sleep(1000); // the first wake pass is mid-card now
+    seedCard("wake-c");
+    const done = () => readEvents().filter((e) => e.type === "card.completed").length >= 3 && cardsIn("in-progress").length === 0;
+    for (let t = 0; t < 150 && !done(); t++) await Bun.sleep(100);
+    await Bun.sleep(1500); // grace window: a duplicate pass would show up here
+    cfg.readOnly = true; // neuter the orphaned watcher before afterEach deletes the board
+    const prompts = readFileSync(log, "utf-8").split("@@PROMPT_END@@").filter((p) => p.includes("ACTOR_MARK"));
+    const completedEv = readEvents().filter((e) => e.type === "card.completed");
+    for (const id of ["wake-a", "wake-b", "wake-c"]) {
+      expect({ id, actor: prompts.filter((p) => p.includes(id)).length }).toEqual({ id, actor: 1 });
+      expect({ id, completed: completedEv.filter((e) => e.card === id).length }).toEqual({ id, completed: 1 });
+    }
+    expect(cardsIn("in-progress").length).toBe(0);
+  }, 25_000);
 });

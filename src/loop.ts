@@ -939,11 +939,17 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     const wake = async () => {
       if (config.readOnly) return; // visitors observe; the lock holder processes
       if (cardsIn("backlog").length === 0 && cardsIn("in-progress").length === 0) return;
+      waking = true;
       try {
-        await runLoop({ ...config, once: true });
+        let pass;
+        do {
+          pass = await runLoop({ ...config, once: true });
+        } while (pass.processed > 0 && cardsIn("backlog").length > 0); // a card arrived during the pass (budget-exhausted skips don't spin)
       } catch (e) {
         // a swallowed wake error looks exactly like "not working" — surface it
         console.log(`  ⚠ wake failed: ${String(e).slice(0, 120)}`);
+      } finally {
+        waking = false;
       }
     };
     let debounce: ReturnType<typeof setTimeout> | null = null;
