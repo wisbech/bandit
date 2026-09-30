@@ -885,12 +885,6 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     const kind = pipelineFor(card.body.match(/^- .+$/gm)?.length ?? 0, card.body.length);
     emit("pipeline.selected", { card: card.id, pipeline: kind });
 
-    // trivial pipelines skip the plan phase
-    const needsPlan = kind !== "trivial";
-    if (needsPlan) {
-      await runPlanPhase(config, card, join(dir("serfs"), "actor"));
-    }
-
     // Convergence rounds: bounded actor-critic dialogue refereed by the lever.
     // Each round: actor pulls → verify gate → critic evaluates → ledger update.
     // 3 rounds max; escalation to a spawned specialist on repeated same-
