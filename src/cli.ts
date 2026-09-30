@@ -545,13 +545,6 @@ const COMMANDS: Command[] = [
       if (!(await herdr.ping())) fail("herdr socket not responding");
       const cfg = JSON.parse(readFileSync(join(banditDir(), "config.json"), "utf-8"));
       const roles = (args[0] ? args[0].split(",") : ["actor", "critic", "master"]);
-      // reuse or create the "bandit" workspace
-      const workspaces = await herdr.listWorkspaces();
-      let ws = workspaces.find((w) => w.label === "bandit");
-      if (!ws) {
-        const created = await herdr.createWorkspace("bandit", process.cwd());
-        ws = { workspace_id: created.workspace_id, label: "bandit" };
-      }
       // Two tabs: management (master, critic) and workers (everything else).
       // Keeps supervision separated from the crew — and keeps panes bigger.
       // Tabs are REUSED when they already exist in the workspace: re-running
@@ -560,6 +553,54 @@ const COMMANDS: Command[] = [
       // labels numeric tabs as "1","2",… so match by tab_id presence per
       // group: first existing tab without a role pane becomes the reuse host.
       const management = ["master", "critic"];
+      // Workspace resolution — per PROJECT, not global label. Multiple
+      // factories share the herdr daemon; a label-only match spawns panes in
+      // whatever "bandit" workspace exists first and cross-contaminates the
+      // registry (the 2026-09-29 pane stampede). Match by cwd (project root)
+      // first; label match only when no cwd-aware workspace exists.
+      const workspaces = await herdr.listWorkspaces();
+      const projectRoot = process.cwd();
+      let ws = workspaces.find((w) => w.cwd && join(w.cwd) === join(projectRoot))
+        ?? workspaces.find((w) => w.label === "bandit");
+      if (!ws) {
+        const created = await herdr.createWorkspace("bandit", process.cwd());
+        ws = { workspace_id: created.workspace_id, label: "bandit" };
+      }
+      const adopted = new Set<string>();
+      // ── RECONCILE before spawn (the stampede fix): one live pane per role
+      // per project. Existing live panes for this role+cwd are ADOPTED
+      // (registered, no spawn); done/exited dupes are stopped. Never spawn
+      // a second pane for a role that already has one live pane here.
+      {
+        const allPanes = await herdr.listPanes(ws.workspace_id).catch(() => []);
+        const mine = allPanes.filter((p) => (p as { foreground_cwd?: string }).foreground_cwd === projectRoot);
+        for (const role of roles) {
+          const sameRole = mine.filter((p) => (p as { display_agent?: string }).display_agent === role);
+          const live = sameRole.filter((p) => (p as { agent_status?: string }).agent_status !== "done" && (p as { agent_status?: string }).agent_status !== "exited");
+          for (const p of sameRole.filter((x) => !live.includes(x))) {
+            const procs = (p as { process_info?: { foreground_processes?: { pid: number; name: string }[] } }).process_info?.foreground_processes ?? [];
+            for (const proc of procs) {
+              if (!["zsh", "bash", "sh", "fish"].includes((proc.name || "").toLowerCase())) {
+                try { process.kill(proc.pid, "SIGTERM"); } catch {}
+              }
+            }
+            console.log(`  ■ stale ${role} pane ${p.pane_id} (${(p as { agent_status?: string }).agent_status ?? "?"}) — stopped`);
+          }
+          // adopt when a live pane already exists: register + skip spawn
+          if (live.length > 0 && !args.includes("--force")) {
+            adopted.add(role);
+            const regPath2 = join(banditDir(), "pane-roles.json");
+            const reg2 = existsSync(regPath2) ? JSON.parse(readFileSync(regPath2, "utf-8")) : {};
+            if (reg2[role] !== live[0].pane_id) {
+              reg2[role] = live[0].pane_id;
+              writeFileSync(regPath2, JSON.stringify(reg2, null, 2));
+              console.log(`  ✓ ${role}: adopted live pane ${live[0].pane_id} — no duplicate spawned`);
+            } else {
+              console.log(`  ✓ ${role}: pane ${live[0].pane_id} already live and registered`);
+            }
+          }
+        }
+      }
       const existingTabs = await herdr.listTabs(ws.workspace_id).catch(() => []);
       const livePanes = await herdr.listPanes(ws.workspace_id).catch(() => []);
       const tabCache = new Map<string, { tab_id: string }>();
@@ -583,6 +624,7 @@ const COMMANDS: Command[] = [
       };
       console.log(`\n  ═══ BANDIT PANES ═══════════════════════`);
       for (const role of roles) {
+        if (adopted.has(role)) continue;
         const roleDir = join(banditDir(), "serfs", role);
         if (!existsSync(join(roleDir, "prompt.md"))) {
           console.log(`  · ${role}: no prompt.md — skipped`);
