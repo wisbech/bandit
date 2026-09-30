@@ -1,6 +1,7 @@
 # Freeze and measure — seven fixes, then twenty real cards
 
-Status: GO (John, 2026-09-30) — Phase 1b hazard fix IN, scoreboard measure IN. Grunt work is handed to Opus per the prompts in §6, one fix at a time, each commit reviewed before the next. Branch `freeze/seven-fixes`, tag `pre-freeze` on main.
+Status: PHASE 1 + 1b DONE (2026-09-30) on branch `freeze/seven-fixes` (tag `pre-freeze` marks main before it): fixes 1-7, the hazard fix (`src/verify.ts`, card-owned `verify:`, argv spawn, fail-closed `verification.unverifiable`), `bandit reopen`, and one extra gate fix found during review (a claimed exit code with no command was green). 112 tests, tsc clean. TFD has `desk/scoreboard.py` (commit 1f928a5, pushed). Not merged to main, not pushed. Next: Phase 2 card list.
+Loose ends carried into Phase 2: TFD card 011 is budget-exhausted on the frontier; `verification.unverifiable` is not yet rendered by board/watch/dossier; the scoreboard reads `.bandit/tmp/walkforward_report.json`; the fix-2 test holds a persistent loop open and adds ~9 s to the suite.
 Date: 2026-09-30
 Rule in force: no new mechanism until the twenty-card run produces a number that asks for one (kiss-discipline §1). One instrument is allowed (`bandit reopen`) because the measurement cannot be honest without it.
 
