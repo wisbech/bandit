@@ -574,7 +574,7 @@ export function parseGate(output: string): GateResult {
     .trim();
   const exitCode = exitMatch ? parseInt(exitMatch[1], 10) : undefined;
   return {
-    green: command !== undefined && exitCode === 0,
+    green: command.length > 0 && exitCode === 0,
     command,
     exitCode,
     output: outMatch?.[1]?.trim(),
