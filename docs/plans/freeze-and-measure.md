@@ -1,0 +1,84 @@
+# Freeze and measure — seven fixes, then twenty real cards
+
+Status: GO (John, 2026-09-30) — Phase 1b hazard fix IN, scoreboard measure IN. Grunt work is handed to Opus per the prompts in §6, one fix at a time, each commit reviewed before the next. Branch `freeze/seven-fixes`, tag `pre-freeze` on main.
+Date: 2026-09-30
+Rule in force: no new mechanism until the twenty-card run produces a number that asks for one (kiss-discipline §1). One instrument is allowed (`bandit reopen`) because the measurement cannot be honest without it.
+
+## 1. Why
+
+The 2026-09-30 review found the mechanical gate right 3/3 and the LLM grader wrong 3/3 on the only adversarial card in the log, six line-level bugs, and a ledger that has never accumulated a real pull. TradingFrontDesk's own log agrees: 45 red gates vs 9 green, 61 grader repairs, 12 failed cards, every ledger pull "flat". Before any new organ, fix what is broken and measure on real work.
+
+## 2. Phase 0 — safety baseline (done by the DA, ~15 min)
+
+- TFD: **DONE 2026-09-30** — baseline commit `31724b6` pushed to `Willowtree-Commodities/TradingFrontDesk` (private). 422 files; scratch, snapshots and per-card `.bandit/` dirs ignored; `secrets/.env` not tracked; staged content scanned for key patterns, none found.
+- bandit: branch `freeze/seven-fixes` from main; tag `pre-freeze`.
+
+## 3. Phase 1 — the seven fixes (Opus, sequential, one commit each)
+
+Each fix: smallest diff, one test that fails before and passes after, `bun test && bunx tsc --noEmit` green, nothing else touched. Commit message `fix(N): <title>`.
+
+| # | Bug | Where | Smallest change | Test |
+|---|---|---|---|---|
+| 1 | Plan phase runs twice per non-trivial card | `src/loop.ts:889-892` and `:581-582` | Delete the outer call in `runLoop`; `convergeCard` owns the plan phase | Stub transport counts prompts with `planOnly`; standard card → exactly 1 |
+| 2 | Wake reentrancy guard never set | `src/loop.ts:944-960` | `waking = true` before the inner `runLoop`, `finally { waking = false }`; after the pass, if backlog non-empty, wake again once | Fire two board events 10 ms apart → one pass; a card added mid-pass is still processed |
+| 3 | Triage overwrites the grading record | `src/loop.ts:713` via `runCritic` `:211-212` | Add `record = true` param to `runCritic`; triage passes `false` and does not write `grading/<card>.md` | After a red round, `grading/<card>.md` still holds `VERDICT:` from the grade, not the triage |
+| 4 | Agent-profile path differs between pane and headless | `src/cli.ts:646` vs `src/runner.ts:792` | One helper `agentProfilePath(root, role)` = `<root>/.opencode/agents/<role>.md`; both sites call it | Unit test on the helper; existing TFD `.opencode/agents/critic.md` resolves |
+| 5 | Budget counts chars/4, real tokens discarded | `src/runner.ts:202-224`, `:317` | `eventsToText` returns `{ text, tokens }`; headless uses `tokens` when > 0, else the estimate | JSONL fixture with two `step_finish` lines → `tokensUsed` equals their sum |
+| 6 | Actor runs with cwd = card folder | `src/runner.ts:797`, `:665-666`, `src/loop.ts` callers | Actor and self-verify run from project root; card path passed as `{{card.dir}}`; TMPDIR = `<root>/.bandit/tmp`; delete the four-levels-up hack | Stub transport asserts `cwd === root`; `verification-output.log` still lands in the card folder |
+| 7 | The lever is the card id, so pulls never accumulate | `src/loop.ts:557-561` | Lever id from the `## Lever` section's first line, slugified (`lever:<slug>`), or frontmatter `lever:` when present; fall back to card id only when both are absent | Two cards naming the same lever → one ledger claim with `pulls = 2` |
+
+Zero-risk deletions ride in the last commit: `processed += 0` (`loop.ts:899`), `explorationShareFor` + `void` (`confidence.ts:214-218`). Update the README test count.
+
+Gate for Phase 1: 96+7 tests green, tsc clean, `bandit doctor` passes in TFD, one dogfood card on bandit itself converges without a hand event.
+
+## 4. Phase 1b — the host-exec hazard (decision required)
+
+The gate runs the actor's `VERIFICATION_COMMAND` through `bash -c` on the host as the operator. This is a feature under the freeze, so it is a choice, not an assumption. Recommended minimum before Phase 2 runs unattended on a repo with a `secrets/` folder:
+
+- L1 card-owned verify: `bandit task --verify "<cmd>"` stored as argv in frontmatter; the gate runs the card's command; the actor's reported command is logged and compared, never executed.
+- L2 argv spawn: `Bun.spawn(argv)`, no shell. Shell metacharacters become inert. The backtick false-red class disappears.
+- L3 fail-closed: actor-proposed commands only run when `verificationContainer` is set; otherwise the gate is red with reason `unverifiable`.
+
+Roughly 80 lines. Skip it and Phase 2 runs with the operator watching, not overnight.
+
+## 5. Phase 2 — twenty real cards on TradingFrontDesk (Opus supervises, headless)
+
+**Cards.** Twenty, small, each with a mechanical verify command and a `## Lever` line naming one of the levers in `.bandit/goal/goal.md`. Source: TFD has no test suite outside a probe, so the first ten are "add a test for <module>" cards (`uv run pytest tests/test_<module>.py -q`); the next ten come from the A2 roadmap items in TFD `docs/plans/`. Card 011 (amend-requeued) and 007 (review) are included as-is.
+
+**The lever, made real.** Every card names a lever from goal.md. `.bandit/goal/active-lever.txt` is set. A measure exists only if something emits it: one script, `desk/scoreboard.py`, prints the goal.md scoreboard (OOS CAGR, Sharpe, MaxDD) as JSON; the DA appends it to `.bandit/goal/measures.jsonl` after each converged card. `strengthen` fires only on a measure delta, not on "card converged". If this is too much for the freeze, the ledger stays as-is and the readout reports pulls-per-lever only.
+
+**Rules.** Nobody touches the board by hand. Every human intervention goes through `bandit reopen <id> --reason "<text>"`, which emits `card.moved` with `by: "hand"` through `emit()`. That event count is the headline number.
+
+**Metrics, all from existing events:**
+
+| Metric | Computed from |
+|---|---|
+| Cards converged with zero hand events | `card.completed` minus cards with any `by: hand` |
+| Hand events per card | `card.moved` where `by = hand` |
+| Grader vs gate agreement | `critic.verdict` joined to `verification.*` on card + round |
+| Rounds per converged card | `round.started` count per `converged` |
+| Transport red rate | `transport.empty_output` / `round.started` |
+| Plan calls per card | `plan.started` per card (must be 1 after fix 1) |
+| Pulls per lever | ledger `pulls` grouped by lever id (must exceed 3 for at least two levers after fix 7) |
+
+**Stop conditions.** Any write outside the TFD tree; three consecutive `transport.red`; any card touching `secrets/`. Stop, diagnose, do not add mechanism.
+
+## 6. Opus handoff prompts (one per fix, run in order, in the bandit repo on `freeze/seven-fixes`)
+
+Prefix for every prompt: "You are fixing exactly one bug in /Users/wrill/Documents/Codiac/Agents/bandit. Read the cited lines first. Make the smallest diff that fixes it, add one test in `tests/fixes.test.ts` that fails before and passes after, run `bun test && bunx tsc --noEmit`, commit as `fix(N): <title>`. Touch nothing else. No refactors, no comments about the fix elsewhere, no doc edits except the README test count in the final commit."
+
+1. "Bug 1: `runLoop` at `src/loop.ts:889-892` calls `runPlanPhase`, and `convergeCard` at `:581-582` calls it again for the same card. Delete the outer call. Test: a standard card through a stub transport records exactly one prompt containing the plan-only render."
+2. "Bug 2: `src/loop.ts:944` declares `waking`, `:957` reads it, nothing sets it. Set it true around the inner `runLoop({...config, once: true})` with a `finally`, and after the pass re-run once if `cardsIn('backlog').length > 0`. Test: two `onBoardEvent` calls 10 ms apart produce one pass; a card created during the pass is processed."
+3. "Bug 3: `src/loop.ts:713` calls `runCritic` for triage; `runCritic` writes `grading/<card>.md` at `:211-212`, overwriting the grade. Add a `record = true` parameter; the triage call passes `false` and skips the write. Test: after a red round the file still contains the grade's VERDICT line."
+4. "Bug 4: `src/cli.ts:646` resolves agent profiles under `.bandit/.opencode/agents`; `src/runner.ts:792` under `<root>/.opencode/agents`. Add `agentProfilePath(root, role)` in `runner.ts`, use it at both sites. Test: the helper returns `<root>/.opencode/agents/<role>.md`."
+5. "Bug 5: `src/runner.ts:202-224` parses real token counts in `eventsToText` and drops them into a text line; `:317` estimates `text.length / 4`. Return `{ text, tokens }` and use `tokens` when it is greater than zero. Test: a JSONL fixture with two `step_finish` events yields `tokensUsed` equal to their sum."
+6. "Bug 6: `src/runner.ts:797` runs the actor with `cwd = opts.cardDir`; `:665-666` climbs four levels to find the root. Pass `root` into `runSerfOnCard` and `selfVerifyGateAsync`; run both from root; expose the card path to the prompt as `{{card.dir}}`; set TMPDIR to `<root>/.bandit/tmp`. Update the actor prompt template in `src/cli.ts` init to include `CARD FOLDER: {{card.dir}}`. Test: stub transport asserts `cwd === root` and the verification log still lands in the card folder."
+7. "Bug 7: `src/loop.ts:557-561` returns `lever:<card.id>` regardless of the `## Lever` text, so no lever ever accumulates pulls across cards. Derive the id from frontmatter `lever:` if present, else the slugified first line of the `## Lever` section, else the card id. Test: two cards with the same lever text produce one ledger claim with `pulls = 2`. In this final commit also delete `processed += 0` (`loop.ts:899`) and `explorationShareFor` plus its `void` line (`confidence.ts:214-218`), and set the README test count."
+
+## 7. Phase 3 — readout
+
+One table in this file under "Results", one paragraph of interpretation, and the single next mechanism the numbers ask for, if any.
+
+## 8. Parked, on purpose
+
+The organic organisation — risk management, FinOps watching market structure, each a folder with a description and a surveillable service — is the right long-term shape and it is exactly what the freeze protects. Note that the zero-mechanism version already exists: `bandit serf risk --prompt "<mission>"` gives the folder and the identity; a `desk/risk_check.py` with a CLI is the service; the watcher is the surveillance. Nothing in bandit has to change to run that experiment. It gets a card in Phase 2 if John wants it measured.
