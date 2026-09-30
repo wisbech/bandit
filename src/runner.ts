@@ -624,6 +624,7 @@ export function agentProfilePath(root: string, role: string): string {
 export interface RunOptions {
   serfDir: string;
   cardDir: string;
+  root: string; // project root (contains .bandit/) — the actor's cwd
   transport: TransportConfig;
   container?: string;
   vars: Record<string, unknown>;
@@ -647,7 +648,7 @@ export interface SelfVerifyResult {
   container?: boolean; // verification ran inside the declared container (invariant #5)
 }
 
-export async function selfVerifyGateAsync(gate: GateResult, cardDir: string, timeoutMs = 300_000, container?: string): Promise<SelfVerifyResult> {
+export async function selfVerifyGateAsync(gate: GateResult, cardDir: string, timeoutMs = 300_000, container?: string, root?: string): Promise<SelfVerifyResult> {
   const result: SelfVerifyResult = { attempted: false, command: gate.command, reportedExitCode: gate.exitCode, timedOut: false, outputBytes: 0 };
   if (!gate.command) return result;
   result.attempted = true;
@@ -664,10 +665,9 @@ export async function selfVerifyGateAsync(gate: GateResult, cardDir: string, tim
   // .bandit/board/<col>/<card>/ fails on cwd — the false red that burned
   // muky62ac for three rounds (self-verify reported=0, actual=1 with
   // "0 test files matching" — the actor's work was real, the seat's cwd was
-  // wrong). Root = four levels up from the card folder; fall back to cardDir
-  // when the layout doesn't match.
-  const projectRoot = join(cardDir, "..", "..", "..", "..");
-  const cwd = existsSync(join(projectRoot, ".bandit", "config.json")) ? projectRoot : cardDir;
+  // wrong). The caller passes the project root; old callers without it fall
+  // back to cardDir.
+  const cwd = root ?? cardDir;
   const proc = Bun.spawn(["bash", "-c", wrapped], { cwd, stdout: "pipe", stderr: "pipe" });
   const timer = setTimeout(() => { try { proc.kill(); } catch {} result.timedOut = true; }, timeoutMs);
   const code = await proc.exited;
@@ -783,7 +783,7 @@ export function packObservation(output: string, cardDir: string, label: string, 
 export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult; gate: GateResult; unchangedGate: boolean; selfVerify?: SelfVerifyResult; evidence?: EvidenceReceipt }> {
   const serf = readSerfFolder(opts.serfDir);
   const card = parseCard(opts.cardDir);
-  const prompt = renderPrompt(serf.prompt, { ...opts.vars, serf: { name: serf.name }, card: cardVars(card) });
+  const prompt = renderPrompt(serf.prompt, { ...opts.vars, serf: { name: serf.name }, card: { ...cardVars(card), dir: opts.cardDir } });
 
   const outputsDir = join(opts.cardDir, "outputs");
   mkdirSync(outputsDir, { recursive: true });
@@ -792,13 +792,12 @@ export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult;
   // Role-scoped capability profile: if the project defines an opencode agent
   // profile for this serf (.opencode/agents/<serf>.md), select it so the
   // harness enforces the serf's permission contract (critic read-only, etc.).
-  // cardDir = <root>/.bandit/board/<col>/<card> → root is four levels up.
-  const agentProfile = agentProfilePath(join(opts.cardDir, "..", "..", "..", ".."), serf.name);
+  const agentProfile = agentProfilePath(opts.root, serf.name);
   const transport = opts.transport.kind === "headless" && opts.transport.command === "opencode" && existsSync(agentProfile)
     ? { ...opts.transport, args: [...opts.transport.args, "--agent", serf.name] }
     : opts.transport;
 
-  const run = await runTransport(transport, prompt, opts.cardDir, outputPath, opts.timeoutMs ?? 600_000);
+  const run = await runTransport(transport, prompt, opts.root, outputPath, opts.timeoutMs ?? 600_000);
   let gate = parseGate(run.output);
 
   // container stage
@@ -809,7 +808,7 @@ export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult;
   // self-verification stage: trust nothing, re-run the reported command
   let selfVerify: SelfVerifyResult | undefined;
   if (gate.command) {
-    selfVerify = await selfVerifyGateAsync(gate, opts.cardDir, 300_000, opts.container);
+    selfVerify = await selfVerifyGateAsync(gate, opts.cardDir, 300_000, opts.container, opts.root);
     if (selfVerify.actualExitCode !== undefined) {
       gate.exitCode = selfVerify.actualExitCode;
       gate.green = selfVerify.actualExitCode === 0;

@@ -194,7 +194,7 @@ describe("self-verify cwd: re-run from project root", () => {
       writeFileSync(join(cardDir, "card.md"), "---\ncolumn: in-progress\n---\n# t\n");
       writeFileSync(join(root, "marker.txt"), "project root marker\n");
       const gate = parseGate("VERIFICATION_COMMAND: cat marker.txt\nVERIFICATION_EXIT_CODE: 0");
-      const sv = await selfVerifyGateAsync(gate, cardDir, 30_000);
+      const sv = await selfVerifyGateAsync(gate, cardDir, 30_000, undefined, root);
       expect(sv.attempted).toBe(true);
       expect(sv.actualExitCode).toBe(0);
     } finally {

@@ -458,6 +458,7 @@ async function runPlanPhase(cfg: LoopConfig, card: CardFolder, actorDir: string)
   const run = await runSerfOnCard({
     serfDir: actorDir,
     cardDir: currentDir,
+    root: cfg.root,
     transport: cfg.transport,
     vars: { planOnly: true },
   });
@@ -628,6 +629,7 @@ async function convergeCard(
         result = await runSerfOnCard({
           serfDir: actorDir,
           cardDir: currentCardDir,
+          root: config.root,
           transport: config.transport,
           container: config.container,
           reducer: config.reducer,
