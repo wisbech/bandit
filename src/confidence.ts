@@ -206,17 +206,6 @@ export function explorationShare(root: string): number {
   return 0.3 * (1 - (1 - globalPlasticity(root, world)) * 0.5); // 0.15–0.3
 }
 
-function explorationShareOf(claim: Claim, share: number): number {
-  return share * (1 - claim.strength);
-}
-
-// wrapper kept for readability in rankLeversForPull
-function explorationShareFor(claim: Claim, root: string): number {
-  return explorationShareOf(claim, explorationShare(root));
-}
-
-void explorationShareFor;
-
 // ── LEDGER EVENTS (audit trail) ──
 
 function appendEvent(root: string, e: LedgerEvent): void {

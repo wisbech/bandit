@@ -557,9 +557,12 @@ function recordAmendRequeue(card: CardFolder): void {
 // capability is cited in two consecutive round triages.
 
 function leverOf(card: CardFolder): string | null {
+  const fm = slugify(card.frontmatter.lever ?? "");
+  if (fm) return `lever:${fm}`;
   const m = card.body.match(/## Lever\n([\s\S]*?)(?=\n## |$)/m);
-  const lever = m?.[1]?.trim();
-  return lever ? `lever:${card.id}` : null;
+  const first = m?.[1]?.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
+  const slug = first ? slugify(first).slice(0, 48).replace(/-$/, "") : "";
+  return slug ? `lever:${slug}` : null;
 }
 
 function slugify(text: string): string {
@@ -895,7 +898,6 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     // 3 rounds max; escalation to a spawned specialist on repeated same-
     // capability failure; final round failure → review (master escalation).
     const result = await convergeCard(config, card, maxRetries, kind);
-    processed += 0; // counted above
     if (result === "converged") {
       moveCard(card, "done");
       emit("card.completed", { card: card.id });
