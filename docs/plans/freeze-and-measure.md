@@ -85,3 +85,53 @@ One table in this file under "Results", one paragraph of interpretation, and the
 ## 8. Parked, on purpose
 
 The organic organisation — risk management, FinOps watching market structure, each a folder with a description and a surveillable service — is the right long-term shape and it is exactly what the freeze protects. Note that the zero-mechanism version already exists: `bandit serf risk --prompt "<mission>"` gives the folder and the identity; a `desk/risk_check.py` with a CLI is the service; the watcher is the surveillance. Nothing in bandit has to change to run that experiment. It gets a card in Phase 2 if John wants it measured.
+
+## 9. Results — the twenty-card run, 2026-09-30
+
+One pass, `bandit start --once`, headless opencode on `ollama/glm-5.3-flash:cloud`, TradingFrontDesk, 07:30Z to 12:49Z (5 h 19 min). bandit at `29ab9bf` (the fixes after that commit were not loaded by the running process).
+
+| Metric | Value |
+|---|---|
+| Cards converged with zero hand events | **14 / 20** |
+| Cards to review after 3 rounds | 3 (06 backtest test, 10 agent-cycle test, 19 kill-switch restart) |
+| Cards requeued by `amend` route | 3 (12 regime probe, 17 wheel, 18 put spread), bounded at 2 requeues |
+| Hand board moves | **0** |
+| Hand actions of any kind | 1 (full walk-forward report regenerated after card 15 left a SPY-only one; logged in `measures.jsonl`) |
+| Grader vs gate agreement | **37 / 37** (0 contradictions; on 28 Sep it was 3 / 6) |
+| Rounds total / hitting the 600 s run budget | 38 / 15 |
+| First-round green | 10 / 20 |
+| Rounds per converged card | 1: ten cards · 2: two · 3: two |
+| Routing decisions parsed | amend 3 · specialist 1 (capability captured) · null 2 (master reply was tool calls only) |
+| Plan phases per card | 0 (all cards classified trivial: ≤3 acceptance lines) |
+| `transport.empty_output` / `unverifiable` | 0 / 0 (every card carried `verify:`) |
+| Pulls per lever | verification-harness 15 · premium-track 6 · sharpe-floor 5 · pooled-risk-sizing 2 · regime-veto 3 · universe-diversification 3 · risk-constitution 3 |
+| Refiner | fired once at the end (trigger reads all-time events: "critic plumbing x72", none from today), proposed 0 edits |
+
+**The lever moved on paper, not on the desk yet.** Adoption table (card 14), same stitched folds, no refit, every probe re-run by the DA and reproducing exactly:
+
+| Lever | Sharpe | CAGR | MaxDD | Decision |
+|---|---|---|---|---|
+| A1 baseline | 0.980 | 9.7% | 16.4% | |
+| pooled equity vol targeting | 1.070 | 10.0% | 12.7% | adopted (IS 1.186 vs OOS 1.07, card 20) |
+| regime veto entry gate | 0.999 | 8.8% | 12.5% | rejected, Sharpe < 1.0 |
+| universe diversification (XLU/XLE/GLD) | 0.973 | 7.1% | 14.2% | rejected |
+
+The desk scoreboard is unchanged (0.98 / 9.7% / 16.4%) because adoption has not been wired into `run_walkforward.py`. That wiring is the next card, and it is the one that turns the probe's number into the measure.
+
+**What the gate caught that nothing else would have.**
+- Card 15 moved the report path correctly and then regenerated the report with `--symbols SPY` to make its test fast: the desk's measure silently became a one-symbol number (Sharpe 0.715, MaxDD 24.8%). Found by reading the scoreboard after the card, not by any organ.
+- Card 10 failed and left 86 uncommitted lines in `trading_agent/agent.py`, including a call to a function defined below its use (NameError on import with no argv).
+- Cards 17 and 18 failed and left partial test files; `pytest tests` now reports 12 failed / 225 passed. Every converged card's tests pass.
+- Card 14 wrote and ran the regime probe that card 12 never finished; its numbers reproduce, so it was real work, not a fabricated row.
+
+**What the numbers ask for (in order).**
+1. **Adoption wiring** (TFD card): `run_walkforward.py --sizing pooled` and the A2 constant set; regenerate; scoreboard reads the adopted desk. No bandit change.
+2. **Measure guard** (TFD card, ~10 lines): `desk/scoreboard.py` refuses a report whose `symbols` differ from `StrategyConfig.universe`. Closes the card-15 hole.
+3. **Failed-card isolation** (bandit, the first mechanism the data justifies): a non-converged card must not leave edits in the shared tree. Cheapest form: `git stash`/checkout of the card's touched files on `task.failed`, recorded as an event; full form: a worktree per card. Evidence: agent.py, wheel, put_spread.
+4. **Refiner window**: trigger over events since the last refine, not all time. Evidence: fired on 72 historical plumbing events with zero today.
+5. **Master consult prompt**: two of six routing replies were tool calls with no DECISION line; the master's `prompt.md` in TFD is refiner notes with no identity block. Prompt fix, not mechanism.
+6. **Run budget**: 15 of 38 rounds hit 600 s; the hard cards converge on round 2 or 3 by accumulating files across rounds. A per-card `runTimeoutMs` in frontmatter is a config knob, not a mechanism; try 900 s on probe cards before anything else.
+7. **Grader**: 37/37 agreement means it added no information today. Keep it in shadow (record, never vote) until a disagreement appears; that is the kiss-discipline row, now with data.
+8. **HRP sizing probe** and **daily GEX instrument** (TFD cards) per the discussion of 30 Sep: the first because card 13's equal-weight diversification failed and card 16 built the cluster tree; the second as a recorded instrument for the regime veto, not a backtestable lever.
+
+**Not asked for by the numbers:** Thompson governor, consult debate, specialist execution, per-criterion calibration, bandit forest, any new organ.
