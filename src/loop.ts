@@ -104,6 +104,7 @@ export function cardsIn(column: (typeof COLUMNS)[number]): CardFolder[] {
   const colDir = dir("board", column);
   if (!existsSync(colDir)) return [];
   return readdirSync(colDir)
+    .sort() // frontier order = id order (APFS readdir is hash order); numbered titles run in sequence
     .map((name) => join(colDir, name))
     .filter((d) => existsSync(join(d, "card.md")))
     .map((d) => parseCard(d));
