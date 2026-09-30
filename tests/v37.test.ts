@@ -24,10 +24,10 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function seedCard(id: string, body = "# card\n- works\n"): string {
+function seedCard(id: string, body = "# card\n- works\n", extraFrontmatter = ""): string {
   const cardDir = join(root, ".bandit", "board", "backlog", id);
   mkdirSync(cardDir, { recursive: true });
-  writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${id}\ntitle: ${id}\n---\n# ${id}\n${body}`);
+  writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${id}\ntitle: ${id}\n${extraFrontmatter}---\n# ${id}\n${body}`);
   return cardDir;
 }
 
@@ -40,7 +40,7 @@ function writeStub(name: string, body: string): string {
 
 describe("V3-7: thread-visible seat", () => {
   test("grader reads consult.md — a criterion satisfied in-thread grades pass", async () => {
-    seedCard("thread-graded");
+    seedCard("thread-graded", undefined, "verify: true\n");
     // write a consult thread into the card folder BEFORE the loop runs
     const cardDir = join(root, ".bandit", "board", "backlog", "thread-graded");
     writeFileSync(join(cardDir, "consult.md"), "# Consult thread\n\n**probe-quants:**\n\nThe quant voice confirmed: the criterion is satisfied — evidence file exists at docs/evidence.md.\n\n");
@@ -107,7 +107,7 @@ describe("V3-7: container enforcement", () => {
   });
 
   test("no container declared → command runs bare (container flag false)", async () => {
-    seedCard("bare-card");
+    seedCard("bare-card", undefined, "verify: true\n");
     const gate: GateResult = { green: false, command: "true", exitCode: 1, inContainer: false };
     const cardDir = join(root, ".bandit", "board", "backlog", "bare-card");
     const r = await selfVerifyGateAsync(gate, cardDir, 10_000);

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { runLoop, cardsIn, readEvents } from "./loop";
 import { dossierCardDir } from "./dossier";
+import { validateVerifyCommand } from "./verify";
 
 // cli.ts — command table (~30 lines). No switch-casing.
 
@@ -218,16 +219,23 @@ const COMMANDS: Command[] = [
   },
   {
     name: "task",
-    summary: 'add a card: bandit task "title" --accept "c1" --accept "c2"',
+    summary: 'add a card: bandit task "title" --accept "c1" --accept "c2" [--verify "<cmd>"]',
     fn: async (args) => {
       if (!existsSync(banditDir())) fail("no .bandit/ — run bandit init");
       const title = args[0];
-      if (!title) fail('usage: bandit task "title" [--accept "criterion"]');
+      if (!title) fail('usage: bandit task "title" [--accept "criterion"] [--verify "<cmd>"]');
       const accepts = args.flatMap((a, i) => (a === "--accept" ? [args[i + 1]] : [])).filter(Boolean);
+      // Card-owned verify: the gate runs THIS (argv, no shell), never the actor's claim.
+      const verifyIdx = args.indexOf("--verify");
+      const verify = verifyIdx >= 0 ? (args[verifyIdx + 1] ?? "") : undefined;
+      if (verify !== undefined) {
+        const err = validateVerifyCommand(verify);
+        if (err) fail(`--verify: ${err}`);
+      }
       const id = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Date.now().toString(36)}`;
       const cardDir = join(banditDir(), "board", "backlog", id);
       mkdirSync(cardDir, { recursive: true });
-      writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${id}\ntitle: ${title}\n---\n# ${title}\n\n## Acceptance\n${accepts.map((a) => `- ${a}`).join("\n") || "- verification command passes"}\n`);
+      writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${id}\ntitle: ${title}\n${verify !== undefined ? `verify: ${verify.trim()}\n` : ""}---\n# ${title}\n\n## Acceptance\n${accepts.map((a) => `- ${a}`).join("\n") || "- verification command passes"}\n`);
       const { emit } = await import("./loop");
       emit("card.created", { card: id, title });
       console.log(`  card: ${id}`);

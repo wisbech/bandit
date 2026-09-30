@@ -119,7 +119,7 @@ describe("V3-0: end-to-end trivial card through composed runner", () => {
     const cardId = "trivial-e2e";
     const cardDir = join(root, ".bandit", "board", "backlog", cardId);
     mkdirSync(cardDir, { recursive: true });
-    writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${cardId}\ntitle: Trivial E2E\n---\n# Trivial E2E\n- it works\n`);
+    writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${cardId}\ntitle: Trivial E2E\nverify: true\n---\n# Trivial E2E\n- it works\n`);
 
     // Monkey-patch the transport stage by writing a fake actor output first:
     // The runner reads the transport config; here we use the true end-to-end

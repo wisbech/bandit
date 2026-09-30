@@ -54,7 +54,7 @@ describe("V3-1: critic verdict parsing", () => {
 
 describe("V3-1: critic gate in the loop", () => {
   test("green verification + grader pass → done, verdict in grading track record", async () => {
-    seedCard("critic-pass");
+    seedCard("critic-pass", "verify: true\n");
     stub("stub-a.sh", greenOutput());
     // grader stub passes with confidence
     const result = await runLoop({
@@ -71,7 +71,7 @@ describe("V3-1: critic gate in the loop", () => {
   });
 
   test("critic plumbing after repair → bypass with documentation, card still done", async () => {
-    seedCard("critic-broken");
+    seedCard("critic-broken", "verify: true\n");
     // critic stub emits garbage (plumbing failure every time)
     const result = await runLoop({
       once: true,
@@ -99,7 +99,7 @@ describe("V3-1: budget hard stop", () => {
   });
 
   test("lifetimeTokensUsed accumulates on the card after a run", async () => {
-    seedCard("spend-card");
+    seedCard("spend-card", "verify: true\n");
     await runLoop({
       once: true,
       root,

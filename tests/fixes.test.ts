@@ -20,10 +20,10 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function seedCard(id: string, body = "# card\n- works\n"): string {
+function seedCard(id: string, body = "# card\n- works\n", extraFrontmatter = ""): string {
   const cardDir = join(root, ".bandit", "board", "backlog", id);
   mkdirSync(cardDir, { recursive: true });
-  writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${id}\ntitle: ${id}\n---\n# ${id}\n${body}`);
+  writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${id}\ntitle: ${id}\n${extraFrontmatter}---\n# ${id}\n${body}`);
   return cardDir;
 }
 
@@ -65,11 +65,11 @@ describe("fix 2: wake reentrancy guard", () => {
     const cfg: Parameters<typeof runLoop>[0] = { root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 1 };
     void runLoop(cfg); // persistent: never resolves
     await Bun.sleep(300);
-    seedCard("wake-a");
+    seedCard("wake-a", undefined, "verify: true\n");
     await Bun.sleep(10);
-    seedCard("wake-b");
+    seedCard("wake-b", undefined, "verify: true\n");
     await Bun.sleep(1000); // the first wake pass is mid-card now
-    seedCard("wake-c");
+    seedCard("wake-c", undefined, "verify: true\n");
     const done = () => readEvents().filter((e) => e.type === "card.completed").length >= 3 && cardsIn("in-progress").length === 0;
     for (let t = 0; t < 150 && !done(); t++) await Bun.sleep(100);
     await Bun.sleep(1500); // grace window: a duplicate pass would show up here

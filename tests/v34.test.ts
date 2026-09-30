@@ -23,10 +23,10 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function seedCard(id: string, body = "# card\n- works\n"): string {
+function seedCard(id: string, body = "# card\n- works\n", extraFrontmatter = ""): string {
   const cardDir = join(root, ".bandit", "board", "backlog", id);
   mkdirSync(cardDir, { recursive: true });
-  writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${id}\n---\n# ${id}\n${body}`);
+  writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${id}\n${extraFrontmatter}---\n# ${id}\n${body}`);
   return cardDir;
 }
 
@@ -135,7 +135,7 @@ describe("V3-4: consult model", () => {
   });
 
   test("pass verdict triggers no consult; grading track record still lands", async () => {
-    seedCard("consult-pass");
+    seedCard("consult-pass", undefined, "verify: true\n");
     const p = writeStub("stub-g.sh", "#!/bin/sh\ncat << 'OUT'\nDid the work.\nVERIFICATION_COMMAND: true\nVERIFICATION_EXIT_CODE: 0\nVERIFICATION_OUTPUT: 3 pass\nOUT\n");
     await runLoop({ once: true, root, transport: { kind: "headless", command: p, args: [] }, maxRetries: 1 });
     const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
@@ -145,7 +145,7 @@ describe("V3-4: consult model", () => {
   });
 
   test("consult cannot turn a red gate green", async () => {
-    seedCard("consult-gate");
+    seedCard("consult-gate", undefined, "verify: false\n");
     const transport = writeStub("stub-gr.sh", [
       "#!/bin/sh",
       'if echo "$1" | grep -q "Grade this output"; then echo "VERDICT: pass\\nCONFIDENCE: 0.9\\nREASONING: grader passed"; exit 0; fi',
@@ -160,6 +160,7 @@ describe("V3-4: consult model", () => {
     expect(result.completed).toBe(0);
     const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
     expect(events).toContain("task.failed");
+    expect(events).toContain('"type":"verification.red"');
     expect(events).not.toContain("converged");
   });
 

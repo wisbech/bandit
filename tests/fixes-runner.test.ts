@@ -32,7 +32,7 @@ test("fix(6): actor runs from the project root, not the card folder", async () =
   const serfDir = join(root, ".bandit", "serfs", "actor");
   mkdirSync(cardDir, { recursive: true });
   mkdirSync(serfDir, { recursive: true });
-  writeFileSync(join(cardDir, "card.md"), "---\ntask: t\n---\n");
+  writeFileSync(join(cardDir, "card.md"), "---\ntask: t\nverify: true\n---\n");
   writeFileSync(join(serfDir, "prompt.md"), "dir={{card.dir}}");
   writeFileSync(join(serfDir, "serf.md"), "actor");
   const rec = join(root, "pwd.txt");

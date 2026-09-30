@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { splitArgv } from "./verify";
 
 // runner.ts — compose a bandit folder + a card into an execution.
 // Each stage is a small function; no transport classes. ~150 lines.
@@ -27,6 +28,8 @@ export interface GateResult {
   output?: string;
   inContainer: boolean;
   fingerprint?: string;
+  reported?: string; // the actor's VERIFICATION_COMMAND — recorded, executed only in a container
+  reason?: "unverifiable"; // red because nothing trusted could be run
 }
 
 export interface RunResult {
@@ -646,20 +649,36 @@ export interface SelfVerifyResult {
   outputBytes: number;
   outputPath?: string;
   container?: boolean; // verification ran inside the declared container (invariant #5)
+  cardOwned: boolean; // the command came from the card's `verify:` frontmatter, not the actor
+  unverifiable?: boolean; // actor-proposed command, no container: not run (fail-closed)
 }
 
+// Security (freeze §4): the actor's VERIFICATION_COMMAND is model-written
+// text — a prompt injection in any file the actor reads would become a shell
+// command on the operator's machine. So: the card's own `verify:` wins (L1);
+// nothing goes through a shell, argv only (L2); an actor-proposed command runs
+// only inside the declared container, otherwise the gate is unverifiable (L3).
 export async function selfVerifyGateAsync(gate: GateResult, cardDir: string, timeoutMs = 300_000, container?: string, root?: string): Promise<SelfVerifyResult> {
-  const result: SelfVerifyResult = { attempted: false, command: gate.command, reportedExitCode: gate.exitCode, timedOut: false, outputBytes: 0 };
-  if (!gate.command) return result;
+  const cardVerify = existsSync(join(cardDir, "card.md")) ? parseCard(cardDir).frontmatter.verify : undefined;
+  const cardOwned = Boolean(cardVerify);
+  const command = cardVerify || gate.command;
+  const result: SelfVerifyResult = { attempted: false, command, reportedExitCode: gate.exitCode, timedOut: false, outputBytes: 0, cardOwned };
+  if (!command) return result;
+  if (!cardOwned && !container) {
+    result.unverifiable = true;
+    return result;
+  }
+  const inner = splitArgv(command);
+  if (inner.length === 0) return result;
   result.attempted = true;
   const logPath = join(cardDir, "verification-output.log");
   // Container enforcement (invariant #5, now actually enforced): when the
   // factory declares a verification container, the re-run goes THROUGH it —
   // docker exec. Before this, verificationContainer was advertised config
   // that the gate silently ignored (the enforcement-is-social bug class).
-  const baseCommand = container ? containerStage(gate.command, container) : gate.command;
+  const alreadyWrapped = inner[0] === "docker" && inner[1] === "exec" && inner[2] === container;
+  const argv = container && !alreadyWrapped ? ["docker", "exec", container, ...inner] : inner;
   result.container = Boolean(container);
-  const wrapped = `{ ${baseCommand} ; } 2>&1 | tee "${logPath}" ; exit \${PIPESTATUS[0]}`;
   // Re-run from the PROJECT ROOT, not the card folder: acceptance commands are
   // written against the project (bun test, pytest, …). Running them from
   // .bandit/board/<col>/<card>/ fails on cwd — the false red that burned
@@ -668,16 +687,31 @@ export async function selfVerifyGateAsync(gate: GateResult, cardDir: string, tim
   // wrong). The caller passes the project root; old callers without it fall
   // back to cardDir.
   const cwd = root ?? cardDir;
-  const proc = Bun.spawn(["bash", "-c", wrapped], { cwd, stdout: "pipe", stderr: "pipe" });
+  result.outputPath = logPath;
+  let proc: ReturnType<typeof Bun.spawn>;
+  try {
+    proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
+  } catch (e) {
+    // argv[0] not found / not executable — the shell's 127, without a shell
+    const msg = `${e instanceof Error ? e.message : String(e)}\n`;
+    writeFileSync(logPath, msg);
+    result.actualExitCode = 127;
+    result.outputBytes = Buffer.byteLength(msg);
+    return result;
+  }
+  // Combined stdout+stderr, in arrival order.
+  const chunks: Uint8Array[] = [];
+  const pump = async (s: ReadableStream<Uint8Array>) => { for await (const c of s) chunks.push(c); };
+  const pumps = Promise.all([pump(proc.stdout as ReadableStream<Uint8Array>), pump(proc.stderr as ReadableStream<Uint8Array>)]).catch(() => {});
   const timer = setTimeout(() => { try { proc.kill(); } catch {} result.timedOut = true; }, timeoutMs);
   const code = await proc.exited;
   clearTimeout(timer);
+  // A grandchild may hold the pipes open after exit/kill; don't wait on it forever.
+  await Promise.race([pumps, new Promise((r) => setTimeout(r, 2_000))]);
+  const out = Buffer.concat(chunks);
+  writeFileSync(logPath, out);
   result.actualExitCode = result.timedOut ? 124 : code;
-  result.outputPath = logPath;
-  try {
-    const size = Bun.spawnSync(["stat", "-f", "%z", logPath]).stdout.toString().trim();
-    result.outputBytes = parseInt(size, 10) || 0;
-  } catch {}
+  result.outputBytes = out.length;
   return result;
 }
 
@@ -799,17 +833,23 @@ export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult;
 
   const run = await runTransport(transport, prompt, opts.root, outputPath, opts.timeoutMs ?? 600_000);
   let gate = parseGate(run.output);
+  gate.reported = gate.command;
 
   // container stage
   if (opts.container && gate.command) {
     gate.inContainer = gate.command.includes(`docker exec ${opts.container}`);
   }
 
-  // self-verification stage: trust nothing, re-run the reported command
+  // self-verification stage: trust nothing. The card's own verify command is
+  // the truth when present; the actor's reported command is only a claim.
   let selfVerify: SelfVerifyResult | undefined;
-  if (gate.command) {
+  if (gate.command || card.frontmatter.verify) {
     selfVerify = await selfVerifyGateAsync(gate, opts.cardDir, 300_000, opts.container, opts.root);
-    if (selfVerify.actualExitCode !== undefined) {
+    if (selfVerify.cardOwned) gate.command = selfVerify.command;
+    if (selfVerify.unverifiable) {
+      gate.green = false;
+      gate.reason = "unverifiable";
+    } else if (selfVerify.actualExitCode !== undefined) {
       gate.exitCode = selfVerify.actualExitCode;
       gate.green = selfVerify.actualExitCode === 0;
       gate.output = selfVerify.timedOut ? (gate.output ?? "") + "\n[self-verify: TIMED OUT]" : gate.output;

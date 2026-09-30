@@ -24,10 +24,10 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function seedCard(id: string, body = "# card\n- works\n"): string {
+function seedCard(id: string, body = "# card\n- works\n", extraFrontmatter = ""): string {
   const cardDir = join(root, ".bandit", "board", "backlog", id);
   mkdirSync(cardDir, { recursive: true });
-  writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${id}\ntitle: ${id}\n---\n# ${id}\n${body}`);
+  writeFileSync(join(cardDir, "card.md"), `---\ncolumn: backlog\nid: ${id}\ntitle: ${id}\n${extraFrontmatter}---\n# ${id}\n${body}`);
   return cardDir;
 }
 
@@ -52,7 +52,7 @@ describe("V3-5: card dossier", () => {
     // runLoop drains the board; it never creates cards. Seed the card AND
     // its card.created event (the `task` command emits it, cli.ts:158) or
     // the timeline lacks the card's origin.
-    seedCard("card-tl");
+    seedCard("card-tl", undefined, "verify: true\n");
     emit("card.created", { card: "card-tl", title: "card-tl" });
     const transport = writeStub("stub-tl.sh", GREEN_STUB);
     await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 1 });
@@ -129,7 +129,7 @@ describe("V3-5: card dossier", () => {
   });
 
   test("artifacts listed with sizes", async () => {
-    seedCard("card-ar");
+    seedCard("card-ar", undefined, "verify: true\n");
     emit("card.created", { card: "card-ar", title: "card-ar" });
     const transport = writeStub("stub-ar.sh", GREEN_STUB);
     await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 1 });
@@ -191,7 +191,7 @@ describe("self-verify cwd: re-run from project root", () => {
       writeFileSync(join(root, ".bandit", "config.json"), "{}");
       const cardDir = join(root, ".bandit", "board", "in-progress", "card-root-cwd");
       mkdirSync(cardDir, { recursive: true });
-      writeFileSync(join(cardDir, "card.md"), "---\ncolumn: in-progress\n---\n# t\n");
+      writeFileSync(join(cardDir, "card.md"), "---\ncolumn: in-progress\nverify: cat marker.txt\n---\n# t\n");
       writeFileSync(join(root, "marker.txt"), "project root marker\n");
       const gate = parseGate("VERIFICATION_COMMAND: cat marker.txt\nVERIFICATION_EXIT_CODE: 0");
       const sv = await selfVerifyGateAsync(gate, cardDir, 30_000, undefined, root);
@@ -208,7 +208,7 @@ describe("self-verify cwd: re-run from project root", () => {
     try {
       const cardDir = join(base, "some", "other", "layout", "card-no-root");
       mkdirSync(cardDir, { recursive: true });
-      writeFileSync(join(cardDir, "card.md"), "---\ncolumn: in-progress\n---\n# t\n");
+      writeFileSync(join(cardDir, "card.md"), "---\ncolumn: in-progress\nverify: cat marker.txt\n---\n# t\n");
       writeFileSync(join(cardDir, "marker.txt"), "card folder marker\n");
       const gate = parseGate("VERIFICATION_COMMAND: cat marker.txt\nVERIFICATION_EXIT_CODE: 0");
       const sv = await selfVerifyGateAsync(gate, cardDir, 30_000);

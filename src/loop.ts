@@ -674,7 +674,12 @@ async function convergeCard(
     lastOutput = run.output;
     recordSpend(parseCard(currentCardDir), run.tokensUsed);
     const green = gate.green;
-    emit(green ? "verification.green" : "verification.red", { card: card.id, round, command: gate.command, selfVerified: selfVerify?.attempted ?? false });
+    if (gate.reason === "unverifiable") {
+      // fail-closed: actor-proposed command, no card verify, no container — never run on the host
+      emit("verification.unverifiable", { card: card.id, round, reported: gate.reported });
+    } else {
+      emit(green ? "verification.green" : "verification.red", { card: card.id, round, command: gate.command, reported: gate.reported, selfVerified: selfVerify?.attempted ?? false, cardOwned: selfVerify?.cardOwned ?? false });
+    }
 
     // ── Decision-port round gate (fail-closed: no evaluator → no questions) ──
     // The loop asks bandit's own questions through the DecisionPort; which
