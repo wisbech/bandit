@@ -32,11 +32,13 @@ The worker is anything that can produce a branch. That is the whole plug.
 
 ### B. Local workers produce branches too
 
-`runLoop` runs each card in its own worktree (`.bandit/worktrees/<card-id>`, branch `bandit/<card-id>`), and the
-existing self-verify becomes a call to the same acceptance function as `bandit accept`. Green: the branch is kept and
-`task.converged` carries its name (the caller merges or opens a PR). Not green after the last round: worktree and
-branch are removed, `task.failed` records that nothing was left behind. This is "failed-card isolation", the first
-mechanism the 30 Sep run justified (three failed cards left debris in the shared tree).
+`runLoop` runs each card in its own worktree (`.bandit/worktrees/<card-id>`, branch `bandit/<card-id>`). The
+per-round self-verify stays what it is (the card's verify, now with the worktree as cwd): mid-round work is
+uncommitted, so it cannot go through `accept`, which checks out a committed sha and runs the full project gates.
+Green: the work is committed, the branch is kept and `task.converged` carries its name; the caller runs
+`bandit accept` on it, merges, or opens a PR. Not green after the last round: worktree and branch are removed and
+`isolation.discarded` is emitted. This is "failed-card isolation", the first mechanism the 30 Sep run justified
+(three failed cards left debris in the shared tree).
 Opt-in per project: `.bandit/config.json` `"isolation": "worktree"`; default stays `"shared"` so nothing changes for existing boards.
 
 ### C. Choice on the decision port (the Jev interface)
@@ -57,3 +59,19 @@ Each waits for a measured trigger.
 
 - `bun test` green, with tests for: accept pass, accept fail on card verify, accept fail on a project gate, worktree always removed, PR-number resolution (gh stubbed), isolation keeps a green branch and removes a failed one, shared mode unchanged, `choose` adapter mapping, routing fallback (line wins, choice used when missing, floor escalates, null port escalates).
 - A live smoke run of `bandit accept` against one TradingFrontDesk draft PR, verdict recorded here.
+
+## 6. As built (2 Oct 2026)
+
+- Commits `b5f41f2` (Choice + routing fallback), `980cddf` (`bandit accept`), `82e8afd` (worktree isolation). `bun test` 131 pass, three runs, type check clean.
+- Live verdict: `bandit accept tfd-pr1 --ref 1 --repo TradingFrontDesk` from a throwaway board, card verify `uv run pytest -q desk/execution`, project gates `uv run pytest -q` and `uv run python trading_agent/verify.py`. All three exit 0 at `d1fa07a3b599` in 57 s; the temporary worktree was removed. `--post` was not used.
+- Card `verify:` is a string split into argv without a shell, not a JSON array. A card without `verify:` is a usage error in `accept`.
+- The Choice fallback is wired at the routing consult only. Plan and stagnation consults still read a missing DECISION line as before.
+- `escalate`, `reject` and `proceed` all land the card in review today, so the floor case changes the recorded decision, not the path.
+
+## 7. Known gaps
+
+- The decision adapter times out at 2 s and a cold local evaluator call took 1.6 s: early routing calls can hit the escalate floor. Raise `decisions.timeoutMs` in the project config rather than the default.
+- `emit` writes under the current directory, so `accept` must be run from the board directory.
+- If `git worktree add` fails, `acceptance.started` has no matching verdict event (CLI exits 2).
+- If the commit on convergence fails, the worktree is kept and the card still moves to done.
+- `--post` is tested with a stubbed `gh` only.
