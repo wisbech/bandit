@@ -5,12 +5,12 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { findCardDir, parseCard, packObservation, runArgv } from "./runner";
+import { findCardDir, parseCard, packObservation, runArgv, defaultExec, type Exec } from "./runner";
 import { splitArgv } from "./verify";
 import { askRoundGate, loadDecisionConfig, resolveDecisionPort, type DecisionPort } from "./decisions";
 import { emit } from "./loop";
 
-export type Exec = (argv: string[], cwd: string) => { code: number; stdout: string; stderr: string };
+export { defaultExec, type Exec };
 
 export interface AcceptOptions {
   root: string;    // board root (contains .bandit/)
@@ -34,11 +34,6 @@ export interface AcceptResult {
 
 // Usage / resolution problems: the CLI maps these to exit 2, never to a verdict.
 export class AcceptError extends Error {}
-
-export const defaultExec: Exec = (argv, cwd) => {
-  const p = Bun.spawnSync(argv, { cwd, stdout: "pipe", stderr: "pipe" });
-  return { code: p.exitCode ?? 1, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
-};
 
 function projectGates(root: string): string[][] {
   const path = join(root, ".bandit", "config.json");

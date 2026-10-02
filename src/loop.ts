@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rename
 import { join } from "node:path";
 import { parseCard, findCardDir, runSerfOnCard, parseGate, type TransportConfig, type CardFolder } from "./runner";
 import { askRoundGate, type DecisionPort } from "./decisions";
+import { isolationMode, openWorktree, keepWorktree, discardWorktree } from "./isolation";
 
 // The decision port (dependency inversion): the loop consumes this interface
 // only. Adapters (systemone/laya, jev, future evaluators) live elsewhere and
@@ -19,6 +20,8 @@ export interface LoopConfig {
   once?: boolean;
   readOnly?: boolean;         // visitor: watch + heartbeat, never process cards
   reducer?: { command: string; args: string[] }; // Evidence-Preserving Reducer (cheap model)
+  workDir?: string;           // per card, isolation mode: the card's worktree (default: root)
+  branch?: string;            // per card, isolation mode: bandit/<card-id>, carried by `converged`
 }
 
 const COLUMNS = ["backlog", "in-progress", "review", "done"] as const;
@@ -499,6 +502,7 @@ async function runPlanPhase(cfg: LoopConfig, card: CardFolder, actorDir: string)
     serfDir: actorDir,
     cardDir: currentDir,
     root: cfg.root,
+    workDir: cfg.workDir,
     transport: cfg.transport,
     vars: { planOnly: true },
   });
@@ -673,6 +677,7 @@ async function convergeCard(
           serfDir: actorDir,
           cardDir: currentCardDir,
           root: config.root,
+          workDir: config.workDir,
           transport: config.transport,
           container: config.container,
           reducer: config.reducer,
@@ -756,7 +761,7 @@ async function convergeCard(
     const converged = green && (verdict.plumbing || verdict.verdict !== "fail" || verdict.confidence <= 0.7);
     if (converged) {
       if (leverId) await conf.strengthen(config.root, leverId, 0.6, 2, "round " + round + ": converged with evidence");
-      emit("converged", { card: card.id, round });
+      emit("converged", { card: card.id, round, ...(config.branch ? { branch: config.branch } : {}) });
       return "converged";
     }
 
@@ -920,6 +925,7 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
   // evaluator is configured — every question answered "no evaluator".
   const { loadDecisionConfig, resolveDecisionPort } = await import("./decisions");
   decisionPort = resolveDecisionPort(loadDecisionConfig(config.root));
+  const isolated = isolationMode(config.root) === "worktree";
 
   // Resume stranded in-progress cards (from interrupted runs) + fresh backlog.
   const frontier = [...cardsIn("in-progress"), ...cardsIn("backlog")];
@@ -943,7 +949,21 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     // Each round: actor pulls → verify gate → critic evaluates → ledger update.
     // 3 rounds max; escalation to a spawned specialist on repeated same-
     // capability failure; final round failure → review (master escalation).
-    const result = await convergeCard(config, card, maxRetries, kind);
+    // Isolation (opt-in): the rounds work in the card's own worktree; the card
+    // folder stays on the board. Anything but converged leaves nothing behind.
+    const wt = isolated ? openWorktree(config.root, card.id) : null;
+    if (wt?.resetFrom) emit("isolation.branch_reset", { card: card.id, branch: wt.branch, previous: wt.resetFrom });
+    let result: Awaited<ReturnType<typeof convergeCard>> | null = null;
+    try {
+      result = await convergeCard(wt ? { ...config, workDir: wt.dir, branch: wt.branch } : config, card, maxRetries, kind);
+    } finally {
+      if (wt && result === "converged") {
+        const kept = keepWorktree(config.root, card.id, `bandit: ${card.id} ${card.frontmatter.title ?? ""}`.trim());
+        if (kept.error) emit("isolation.commit_failed", { card: card.id, branch: kept.branch, dir: wt.dir, reason: kept.error });
+      } else if (wt) {
+        emit("isolation.discarded", { card: card.id, branch: discardWorktree(config.root, card.id) });
+      }
+    }
     if (result === "converged") {
       moveCard(card, "done");
       emit("card.completed", { card: card.id });

@@ -636,6 +636,7 @@ export interface RunOptions {
   serfDir: string;
   cardDir: string;
   root: string; // project root (contains .bandit/) — the actor's cwd
+  workDir?: string; // where the work happens (harness + self-verify cwd); defaults to root. Isolation: the card's worktree.
   transport: TransportConfig;
   container?: string;
   vars: Record<string, unknown>;
@@ -703,6 +704,17 @@ export async function selfVerifyGateAsync(gate: GateResult, cardDir: string, tim
   result.outputBytes = r.output.length;
   return result;
 }
+
+// Short synchronous tool calls (git, gh): argv, no shell. Injectable in tests.
+export type Exec = (argv: string[], cwd: string) => { code: number; stdout: string; stderr: string };
+export const defaultExec: Exec = (argv, cwd) => {
+  try {
+    const p = Bun.spawnSync(argv, { cwd, stdout: "pipe", stderr: "pipe" });
+    return { code: p.exitCode ?? 1, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
+  } catch (e) {
+    return { code: 127, stdout: "", stderr: e instanceof Error ? e.message : String(e) }; // not installed
+  }
+};
 
 // One argv, no shell, in cwd: combined stdout+stderr and the exit code
 // (127 = could not spawn, 124 = timed out). Shared by self-verify and accept.
@@ -843,7 +855,8 @@ export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult;
     ? { ...opts.transport, args: [...opts.transport.args, "--agent", serf.name] }
     : opts.transport;
 
-  const run = await runTransport(transport, prompt, opts.root, outputPath, opts.timeoutMs ?? 600_000);
+  const workDir = opts.workDir ?? opts.root;
+  const run = await runTransport(transport, prompt, workDir, outputPath, opts.timeoutMs ?? 600_000);
   let gate = parseGate(run.output);
   gate.reported = gate.command;
 
@@ -856,7 +869,7 @@ export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult;
   // the truth when present; the actor's reported command is only a claim.
   let selfVerify: SelfVerifyResult | undefined;
   if (gate.command || card.frontmatter.verify) {
-    selfVerify = await selfVerifyGateAsync(gate, opts.cardDir, 300_000, opts.container, opts.root);
+    selfVerify = await selfVerifyGateAsync(gate, opts.cardDir, 300_000, opts.container, workDir);
     if (selfVerify.cardOwned) gate.command = selfVerify.command;
     if (selfVerify.unverifiable) {
       gate.green = false;
