@@ -18,6 +18,10 @@ export interface DecisionPort {
 
   // How similar are two rounds' failures? 0 = different problems, 1 = same failure.
   failureSimilarity(previous: string, current: string): Promise<number | null>;
+
+  // Which of these options fits the state? options = label -> one-line
+  // description. Returns label -> probability, or null (fail-closed).
+  choose(state: string, instructions: string, options: Record<string, string>): Promise<Record<string, number> | null>;
 }
 
 export interface DecisionConfig {
@@ -89,6 +93,7 @@ export function nullPort(): DecisionPort {
     demonstrates: async () => null,
     vacuous: async () => null,
     failureSimilarity: async () => null,
+    choose: async () => null,
   };
 }
 

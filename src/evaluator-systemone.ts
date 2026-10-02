@@ -18,7 +18,7 @@ export function systemOneAdapter(cfg: DecisionConfig): DecisionPort {
   async function ask(
     state: string,
     questions: Record<string, { type: string; instructions: string; criteria?: unknown }>,
-  ): Promise<Record<string, { noul?: number; answer?: string | number; probability?: number }> | null> {
+  ): Promise<Record<string, { noul?: number; answer?: string | number; probability?: number; probabilities?: unknown }> | null> {
     const bounded = state.length > 8_000 ? state.slice(0, 8_000) : state;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -75,6 +75,18 @@ export function systemOneAdapter(cfg: DecisionConfig): DecisionPort {
       if (!a) return null;
       const v = Number(a.answer ?? a.probability);
       return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : null;
+    },
+
+    // Wire: {"answers":{"route":{"type":"choice","choice":"amend","probabilities":{"proceed":0.26,"amend":0.51,...}}}}
+    // Anything that is not label -> finite number over the given labels is null.
+    async choose(state, instructions, options) {
+      const answers = await ask(state, { route: { type: "choice", instructions, criteria: options } });
+      const p = answers?.route?.probabilities;
+      if (!p || typeof p !== "object" || Array.isArray(p)) return null;
+      const entries = Object.entries(p as Record<string, unknown>);
+      if (entries.length === 0) return null;
+      if (!entries.every(([k, v]) => Object.hasOwn(options, k) && typeof v === "number" && Number.isFinite(v))) return null;
+      return Object.fromEntries(entries) as Record<string, number>;
     },
   };
 }

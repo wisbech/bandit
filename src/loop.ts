@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rename
 import { join } from "node:path";
 import { parseCard, findCardDir, runSerfOnCard, parseGate, type TransportConfig, type CardFolder } from "./runner";
 import { askRoundGate, type DecisionPort } from "./decisions";
+import { isolationMode, openWorktree, keepWorktree, discardWorktree } from "./isolation";
 
 // The decision port (dependency inversion): the loop consumes this interface
 // only. Adapters (systemone/laya, jev, future evaluators) live elsewhere and
@@ -19,6 +20,8 @@ export interface LoopConfig {
   once?: boolean;
   readOnly?: boolean;         // visitor: watch + heartbeat, never process cards
   reducer?: { command: string; args: string[] }; // Evidence-Preserving Reducer (cheap model)
+  workDir?: string;           // per card, isolation mode: the card's worktree (default: root)
+  branch?: string;            // per card, isolation mode: bandit/<card-id>, carried by `converged`
 }
 
 const COLUMNS = ["backlog", "in-progress", "review", "done"] as const;
@@ -269,6 +272,35 @@ function parseConsultDecision(text: string): ConsultDecision["decision"] {
   return text.match(/DECISION:\s*(proceed|amend|reject|specialist|escalate)/i)?.[1]?.toLowerCase() as ConsultDecision["decision"] ?? null;
 }
 
+// Routing fallback (Choice on the decision port): the DECISION line wins; when
+// it is missing the port chooses over the five routes, and only a confident
+// top label (p >= ROUTE_MIN_P) is taken. Anything else is escalate — the same
+// path a missing line always took (no specialist, no requeue → review).
+export const ROUTE_MIN_P = 0.5;
+export const ROUTE_OPTIONS: Record<string, string> = {
+  proceed: "the work can continue as it is; no change of plan is needed",
+  amend: "retry the card with an amended plan that answers the arguments in the thread",
+  reject: "the card or its plan is wrong and should not be retried as written",
+  specialist: "the actor lacks a capability it cannot learn mid-card; spawn a specialist",
+  escalate: "a human must decide; the agents cannot resolve this",
+};
+
+export async function routeDecision(
+  port: DecisionPort | null,
+  reply: string,
+): Promise<{ decision: NonNullable<ConsultDecision["decision"]>; source: "line" | "choice" | "floor"; probabilities: Record<string, number> | null }> {
+  const line = parseConsultDecision(reply);
+  if (line) return { decision: line, source: "line", probabilities: null };
+  const probabilities = port
+    ? await port.choose(reply.slice(0, 6000), "Which route does this consult reply argue for?", ROUTE_OPTIONS).catch(() => null)
+    : null;
+  const top = probabilities ? Object.entries(probabilities).sort((a, b) => b[1] - a[1])[0] : undefined;
+  if (top && top[1] >= ROUTE_MIN_P) {
+    return { decision: top[0] as NonNullable<ConsultDecision["decision"]>, source: "choice", probabilities };
+  }
+  return { decision: "escalate", source: "floor", probabilities };
+}
+
 // SUMMON: <role> — the master's move inside a consult: bring ONE domain voice
 // into the thread before deciding (researcher, architect, any role the project
 // defines). The summoned serf is spawned as a real child folder (audit), runs
@@ -470,6 +502,7 @@ async function runPlanPhase(cfg: LoopConfig, card: CardFolder, actorDir: string)
     serfDir: actorDir,
     cardDir: currentDir,
     root: cfg.root,
+    workDir: cfg.workDir,
     transport: cfg.transport,
     vars: { planOnly: true },
   });
@@ -644,6 +677,7 @@ async function convergeCard(
           serfDir: actorDir,
           cardDir: currentCardDir,
           root: config.root,
+          workDir: config.workDir,
           transport: config.transport,
           container: config.container,
           reducer: config.reducer,
@@ -727,7 +761,7 @@ async function convergeCard(
     const converged = green && (verdict.plumbing || verdict.verdict !== "fail" || verdict.confidence <= 0.7);
     if (converged) {
       if (leverId) await conf.strengthen(config.root, leverId, 0.6, 2, "round " + round + ": converged with evidence");
-      emit("converged", { card: card.id, round });
+      emit("converged", { card: card.id, round, ...(config.branch ? { branch: config.branch } : {}) });
       return "converged";
     }
 
@@ -844,7 +878,8 @@ async function convergeCard(
     const masterOut = join(outputsDir, `consult-${Date.now().toString(36)}-route.md`);
     const masterReply = (await runSerfReply(config, join(dir("serfs"), "master"), masterOut, masterOpening)).output;
     appendConsultTurn(currentDir, { by: "master", text: masterReply });
-    const route = parseConsultDecision(masterReply);
+    const { decision: route, source, probabilities } = await routeDecision(decisionPort, masterReply);
+    emit("consult.decision", { card: card.id, thread: "route", decision: route, source, probabilities });
     emit("consult.routed", { card: card.id, decision: route });
     if (route === "specialist") {
       const capability = masterReply.match(/DECISION:\s*specialist:?\s*:?\s*([A-Za-z0-9 _-]{2,60})/i)?.[1]?.trim()
@@ -890,6 +925,7 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
   // evaluator is configured — every question answered "no evaluator".
   const { loadDecisionConfig, resolveDecisionPort } = await import("./decisions");
   decisionPort = resolveDecisionPort(loadDecisionConfig(config.root));
+  const isolated = isolationMode(config.root) === "worktree";
 
   // Resume stranded in-progress cards (from interrupted runs) + fresh backlog.
   const frontier = [...cardsIn("in-progress"), ...cardsIn("backlog")];
@@ -913,7 +949,21 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     // Each round: actor pulls → verify gate → critic evaluates → ledger update.
     // 3 rounds max; escalation to a spawned specialist on repeated same-
     // capability failure; final round failure → review (master escalation).
-    const result = await convergeCard(config, card, maxRetries, kind);
+    // Isolation (opt-in): the rounds work in the card's own worktree; the card
+    // folder stays on the board. Anything but converged leaves nothing behind.
+    const wt = isolated ? openWorktree(config.root, card.id) : null;
+    if (wt?.resetFrom) emit("isolation.branch_reset", { card: card.id, branch: wt.branch, previous: wt.resetFrom });
+    let result: Awaited<ReturnType<typeof convergeCard>> | null = null;
+    try {
+      result = await convergeCard(wt ? { ...config, workDir: wt.dir, branch: wt.branch } : config, card, maxRetries, kind);
+    } finally {
+      if (wt && result === "converged") {
+        const kept = keepWorktree(config.root, card.id, `bandit: ${card.id} ${card.frontmatter.title ?? ""}`.trim());
+        if (kept.error) emit("isolation.commit_failed", { card: card.id, branch: kept.branch, dir: wt.dir, reason: kept.error });
+      } else if (wt) {
+        emit("isolation.discarded", { card: card.id, branch: discardWorktree(config.root, card.id) });
+      }
+    }
     if (result === "converged") {
       moveCard(card, "done");
       emit("card.completed", { card: card.id });
