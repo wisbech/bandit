@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync, unlinkSync, openSync, writeSync, closeSync } from "node:fs";
 import { join } from "node:path";
 import { parseCard, findCardDir, runSerfOnCard, parseGate, type TransportConfig, type CardFolder } from "./runner";
 import { askRoundGate, type DecisionPort } from "./decisions";
@@ -18,6 +18,7 @@ export interface LoopConfig {
   maxRetries?: number;
   once?: boolean;
   readOnly?: boolean;         // visitor: watch + heartbeat, never process cards
+  holdsLock?: boolean;        // this process holds run.lock (runtime-acquired; visitors upgrade)
   reducer?: { command: string; args: string[] }; // Evidence-Preserving Reducer (cheap model)
 }
 
@@ -880,9 +881,67 @@ async function convergeCard(
   return "no-convergence";
 }
 
+// ── FACTORY LOCK (runtime-acquired, not boot-time fate) ──
+// A boot-time visitor becomes the holder the moment the lock is free.
+// O_EXCL write is the race primitive: exactly one process wins.
+let releaseHooksRegistered = false;
+function registerReleaseHooks(fn: () => void): void {
+  if (releaseHooksRegistered) return;
+  releaseHooksRegistered = true;
+  process.on("exit", fn);
+  process.on("SIGINT", () => { fn(); process.exit(0); });
+  process.on("SIGTERM", () => { fn(); process.exit(0); });
+}
+
+// Lock acquisition is a RUNTIME event, not a boot-time fate (the
+// Sep-20/Oct-1 double-master + visitor-forever bug): a boot-time visitor
+// becomes the holder the moment the lock is free. O_EXCL write is the
+// race primitive — exactly one process wins; losers stay visitors and
+// retry on the next wake.
+
+function factoryLockPath(config: LoopConfig): string {
+  return join(config.root, ".bandit", "run.lock");
+}
+
+const tryAcquireLock = async (config: LoopConfig): Promise<boolean> => {
+  if (config.holdsLock) return true;
+  const lockPath = factoryLockPath(config);
+  try {
+    if (existsSync(lockPath)) {
+      const other = parseInt(readFileSync(lockPath, "utf-8").trim(), 10);
+      if (other === process.pid) { config.holdsLock = true; return true; } // boot wrote it — we hold it
+      if (Number.isFinite(other)) {
+        try { process.kill(other, 0); return false; } // holder alive
+        catch { try { unlinkSync(lockPath); } catch {} } // stale: clear and race
+      }
+    }
+    try { writeSync(openSync(lockPath, "wx"), String(process.pid)); }
+    catch { return false; } // lost the race
+    if (config.readOnly) { config.readOnly = false; console.log("  ⇧ lock acquired — this visitor is the factory now"); }
+    config.holdsLock = true;
+    return true;
+  } catch { return false; }
+};
+
+const releaseCurrentLock = (config: LoopConfig): void => {
+  if (!config.holdsLock) return;
+  try {
+    const holder = parseInt(readFileSync(factoryLockPath(config), "utf-8").trim(), 10);
+    if (holder === process.pid) unlinkSync(factoryLockPath(config));
+  } catch {}
+  config.holdsLock = false;
+};
+let _activeConfig: LoopConfig | null = null;
+registerReleaseHooks(() => { if (_activeConfig) releaseCurrentLock(_activeConfig); });
+
 export async function runLoop(config: LoopConfig): Promise<{ processed: number; completed: number; failed: number }> {
   _root = config.root;
   ensureScaffold();
+  // The lock is runtime currency: every entry races for it. Visitors promote
+  // on wake; holders re-assert. `--once` releases when the pass completes.
+  _activeConfig = config;
+  await tryAcquireLock(config);
+  
   let processed = 0, completed = 0, failed = 0;
   const maxRetries = config.maxRetries ?? 3;
 
@@ -890,6 +949,14 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
   // evaluator is configured — every question answered "no evaluator".
   const { loadDecisionConfig, resolveDecisionPort } = await import("./decisions");
   decisionPort = resolveDecisionPort(loadDecisionConfig(config.root));
+
+  // Failed the lock race → still a visitor: process nothing. The lock holder
+  // does the work; the visitor's persistent loop (or your next boot) wakes
+  // and re-races. A visitor --once must NEVER process cards.
+  if (config.readOnly) {
+    console.log("  ◌ another factory holds run.lock — visiting (watch-only). Run `bandit watch` for the live view.");
+    return { processed: 0, completed: 0, failed: 0 };
+  }
 
   // Resume stranded in-progress cards (from interrupted runs) + fresh backlog.
   const frontier = [...cardsIn("in-progress"), ...cardsIn("backlog")];
@@ -960,7 +1027,15 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     }, 60_000);
     let waking = false;
     const wake = async () => {
-      if (config.readOnly) return; // visitors observe; the lock holder processes
+      // Visitors observe BUT try to promote on every wake: the role of
+      // factory is runtime, not a boot-time fate.
+      if (config.readOnly) {
+        const got = await tryAcquireLock(config);
+        if (!got) return; // still a visitor — the holder processes
+      }
+      try {
+        await tryAcquireLock(config);
+      } catch {}
       if (cardsIn("backlog").length === 0 && cardsIn("in-progress").length === 0) return;
       waking = true;
       try {
