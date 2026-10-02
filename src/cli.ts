@@ -263,6 +263,30 @@ const COMMANDS: Command[] = [
     },
   },
   {
+    name: "accept",
+    summary: "verdict on any branch: bandit accept <card-id> --ref <branch|sha|pr-number> [--repo <path>] [--post] — exit 0 pass, 1 fail, 2 usage",
+    fn: async (args) => {
+      const usage = "usage: bandit accept <card-id> --ref <branch|sha|pr-number> [--repo <path>] [--post]";
+      const flag = (name: string) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
+      const id = args[0];
+      const ref = flag("--ref");
+      if (!existsSync(banditDir()) || !id || id.startsWith("--") || !ref || ref.startsWith("--")) {
+        console.error(usage);
+        process.exit(2);
+      }
+      const { acceptRef } = await import("./accept");
+      try {
+        const r = await acceptRef({ root: process.cwd(), cardId: id, ref, repo: flag("--repo"), post: args.includes("--post") });
+        for (const g of r.gates) console.log(`  ${g.exitCode === 0 ? "✓" : "✗"} ${g.name.padEnd(8)} exit ${g.exitCode}  ${(g.durationMs / 1000).toFixed(1)}s  ${g.argv.join(" ")}`);
+        console.log(`  ${r.passed ? "PASSED" : "FAILED"} ${id} at ${r.sha.slice(0, 12)}`);
+        process.exit(r.passed ? 0 : 1);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      }
+    },
+  },
+  {
     name: "board",
     summary: "show the kanban (--verbose folds in-flight card events + frontmatter)",
     fn: (args) => {

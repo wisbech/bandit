@@ -696,31 +696,35 @@ export async function selfVerifyGateAsync(gate: GateResult, cardDir: string, tim
   // back to cardDir.
   const cwd = root ?? cardDir;
   result.outputPath = logPath;
+  const r = await runArgv(argv, cwd, timeoutMs);
+  writeFileSync(logPath, r.output);
+  result.timedOut = r.timedOut;
+  result.actualExitCode = r.exitCode;
+  result.outputBytes = r.output.length;
+  return result;
+}
+
+// One argv, no shell, in cwd: combined stdout+stderr and the exit code
+// (127 = could not spawn, 124 = timed out). Shared by self-verify and accept.
+export async function runArgv(argv: string[], cwd: string, timeoutMs: number): Promise<{ exitCode: number; timedOut: boolean; output: Buffer }> {
   let proc: ReturnType<typeof Bun.spawn>;
   try {
     proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
   } catch (e) {
     // argv[0] not found / not executable — the shell's 127, without a shell
-    const msg = `${e instanceof Error ? e.message : String(e)}\n`;
-    writeFileSync(logPath, msg);
-    result.actualExitCode = 127;
-    result.outputBytes = Buffer.byteLength(msg);
-    return result;
+    return { exitCode: 127, timedOut: false, output: Buffer.from(`${e instanceof Error ? e.message : String(e)}\n`) };
   }
   // Combined stdout+stderr, in arrival order.
   const chunks: Uint8Array[] = [];
   const pump = async (s: ReadableStream<Uint8Array>) => { for await (const c of s) chunks.push(c); };
   const pumps = Promise.all([pump(proc.stdout as ReadableStream<Uint8Array>), pump(proc.stderr as ReadableStream<Uint8Array>)]).catch(() => {});
-  const timer = setTimeout(() => { try { proc.kill(); } catch {} result.timedOut = true; }, timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => { try { proc.kill(); } catch {} timedOut = true; }, timeoutMs);
   const code = await proc.exited;
   clearTimeout(timer);
   // A grandchild may hold the pipes open after exit/kill; don't wait on it forever.
   await Promise.race([pumps, new Promise((r) => setTimeout(r, 2_000))]);
-  const out = Buffer.concat(chunks);
-  writeFileSync(logPath, out);
-  result.actualExitCode = result.timedOut ? 124 : code;
-  result.outputBytes = out.length;
-  return result;
+  return { exitCode: timedOut ? 124 : code, timedOut, output: Buffer.concat(chunks) };
 }
 
 // ── EVIDENCE-PRESERVING REDUCER (SoL-Pi appropriation) ──
