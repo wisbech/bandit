@@ -1,0 +1,16 @@
+{"text": "The nightly reconciliation job failed three times last week because the broker CSV switched to semicolons on 24 Sep. Validate the delimiter before parsing and alert instead of skipping rows.", "expect": {"evidence": true, "actionable": true, "kind": "lesson"}}
+{"text": "After we cut the order gateway connection pool from 16 to 4 on 2 Oct, p99 latency went from 40 ms to 900 ms. Do not change pool sizes without a load test first.", "expect": {"evidence": true, "actionable": true, "kind": "lesson"}}
+{"text": "Two deploys on Friday afternoons this quarter caused weekend pages, and both were rolled back within an hour. Ship risky changes Monday to Thursday only.", "expect": {"evidence": true, "actionable": true, "kind": "lesson"}}
+{"text": "The flaky checkout test failed 11 of 200 runs, always when the clock crossed midnight UTC. Freeze the clock in any test that touches dates.", "expect": {"evidence": true, "actionable": true, "kind": "lesson"}}
+{"text": "Great sprint everyone, the team really pulled together and the energy was fantastic.", "expect": {"evidence": false, "actionable": false, "kind": "opinion"}}
+{"text": "The new dashboard is so much better than the old one. Love it.", "expect": {"evidence": false, "actionable": false, "kind": "opinion"}}
+{"text": "Honestly the deploy process feels clunky and nobody likes it.", "expect": {"evidence": false, "actionable": false, "kind": "opinion"}}
+{"text": "The risk desk has been amazing to work with lately, super responsive.", "expect": {"evidence": false, "actionable": false, "kind": "opinion"}}
+{"text": "The market data feed delivers about 40,000 quotes per second at the open and drops to roughly 3,000 by midday.", "expect": {"evidence": true, "actionable": false, "kind": "description"}}
+{"text": "On 30 Sep the settlement batch finished at 06:12, eighteen minutes later than usual, and all trades settled.", "expect": {"evidence": true, "actionable": false, "kind": "description"}}
+{"text": "The pricing service reads instrument definitions from the reference database and caches them in memory.", "expect": {"evidence": false, "actionable": false, "kind": "description"}}
+{"text": "Our on-call rotation covers the trading desk systems and the internal tools, with a weekly handover.", "expect": {"evidence": false, "actionable": false, "kind": "description"}}
+{"text": "Rotate the API keys on the staging gateway.", "expect": {"evidence": false, "actionable": true, "kind": "todo"}}
+{"text": "Someone needs to write the runbook for failing over the order router.", "expect": {"evidence": false, "actionable": true, "kind": "todo"}}
+{"text": "Add a dashboard panel for rejected orders per venue.", "expect": {"evidence": false, "actionable": true, "kind": "todo"}}
+{"text": "Upgrade the logging library in the risk service and remove the old config flag.", "expect": {"evidence": false, "actionable": true, "kind": "todo"}}

@@ -1,0 +1,24 @@
+{
+  "name": "learned-note",
+  "about": "Is a 'what we learned' note worth keeping? Evidence, a change in behaviour, and what kind of note it is. No thresholds until calibrated.",
+  "questions": {
+    "evidence": {
+      "type": "noul",
+      "instructions": "Does this note cite a concrete observation, number or date as evidence?"
+    },
+    "actionable": {
+      "type": "noul",
+      "instructions": "Does this note tell the reader what to do differently?"
+    },
+    "kind": {
+      "type": "choice",
+      "instructions": "What kind of note is this?",
+      "criteria": {
+        "lesson": "a lesson learned from something that happened, with what to do next time",
+        "description": "a neutral account of how something is or what happened, with no advice",
+        "opinion": "praise, complaint or a general feeling without specifics",
+        "todo": "a task someone still has to do"
+      }
+    }
+  }
+}

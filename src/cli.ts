@@ -287,6 +287,14 @@ const COMMANDS: Command[] = [
     },
   },
   {
+    name: "gauge",
+    summary: "read the fluffy qualities of a text: bandit gauge <name> (--file <path> | --text <s> | stdin) [--json] [--timeout-ms N] | --calibrate <examples.jsonl> — exit 0 pass, 1 fail, 2 usage/no reading",
+    fn: async (args) => {
+      const { gaugeMain } = await import("./gauge");
+      process.exit(await gaugeMain(args));
+    },
+  },
+  {
     name: "board",
     summary: "show the kanban (--verbose folds in-flight card events + frontmatter)",
     fn: (args) => {

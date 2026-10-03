@@ -22,7 +22,20 @@ export interface DecisionPort {
   // Which of these options fits the state? options = label -> one-line
   // description. Returns label -> probability, or null (fail-closed).
   choose(state: string, instructions: string, options: Record<string, string>): Promise<Record<string, number> | null>;
+
+  // Generic typed ask: several questions about one state in one call. Every
+  // question answered and well-formed, or null (fail-closed, all or nothing).
+  ask(state: string, questions: Record<string, GaugeQuestion>, timeoutMs?: number): Promise<Record<string, GaugeAnswer> | null>;
 }
+
+export interface GaugeQuestion {
+  type: "noul" | "score" | "choice";
+  instructions: string;
+  criteria?: string[] | Record<string, string>; // score: ordered labels; choice: label -> description
+}
+
+// noul -> p (0..1); choice -> top label + label -> p; score -> value (0..1 along the ordered labels)
+export type GaugeAnswer = { p: number } | { label: string; probabilities: Record<string, number> } | { value: number };
 
 export interface DecisionConfig {
   evaluator: "none" | "systemone"; // adapters register additional names here
@@ -94,6 +107,7 @@ export function nullPort(): DecisionPort {
     vacuous: async () => null,
     failureSimilarity: async () => null,
     choose: async () => null,
+    ask: async () => null,
   };
 }
 
