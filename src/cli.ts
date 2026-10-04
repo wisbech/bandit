@@ -278,8 +278,34 @@ const COMMANDS: Command[] = [
       try {
         const r = await acceptRef({ root: process.cwd(), cardId: id, ref, repo: flag("--repo"), post: args.includes("--post") });
         for (const g of r.gates) console.log(`  ${g.exitCode === 0 ? "✓" : "✗"} ${g.name.padEnd(8)} exit ${g.exitCode}  ${(g.durationMs / 1000).toFixed(1)}s  ${g.argv.join(" ")}`);
-        console.log(`  ${r.passed ? "PASSED" : "FAILED"} ${id} at ${r.sha.slice(0, 12)}`);
+        for (const g of r.gates) if (g.exitCode !== 0 && g.output.trim()) console.log(g.output.trim().split("\n").slice(0, 20).map((l) => `      ${l}`).join("\n"));
+        console.log(`  ${r.passed ? "PASSED" : "FAILED"} ${id} at ${r.sha.slice(0, 12)}  (ratified: ${r.ratified ? "yes" : "no"}, base ${r.base ? r.base.slice(0, 12) : "none"})`);
         process.exit(r.passed ? 0 : 1);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      }
+    },
+  },
+  {
+    name: "ratify",
+    summary: 'human-only: pin a card\'s check: bandit ratify <card-id> --paths <p1,p2,...> [--verify "<cmd>"] — writes checks/<card-id>.json; you commit it on the base branch',
+    fn: async (args) => {
+      const usage = 'usage: bandit ratify <card-id> --paths <p1,p2,...> [--verify "<cmd>"]';
+      const flag = (name: string) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
+      const id = args[0];
+      const paths = (flag("--paths") ?? "").split(",").map((p) => p.trim()).filter(Boolean);
+      if (!existsSync(banditDir()) || !id || id.startsWith("--") || paths.length === 0) {
+        console.error(usage);
+        process.exit(2);
+      }
+      const { ratify } = await import("./kernel/judge");
+      try {
+        const { file, ratification } = ratify(process.cwd(), process.cwd(), id, paths, flag("--verify"));
+        console.log(`  ✓ wrote ${file}`);
+        console.log(`    verify: ${ratification.verify.join(" ")}`);
+        for (const p of ratification.checkPaths) console.log(`    ${p}  sha256 ${ratification.sha256[p].slice(0, 16)}`);
+        console.log(`  → commit this file on your base branch: git add checks/${id}.json && git commit -m "ratify ${id}"`);
       } catch (e) {
         console.error(e instanceof Error ? e.message : String(e));
         process.exit(2);
