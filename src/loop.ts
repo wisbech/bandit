@@ -1,11 +1,12 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { parseCard, findCardDir, runSerfOnCard, parseGate, type TransportConfig, type CardFolder } from "./runner";
+import { parseCard, findCardDir, runSerfOnCard, parseGate, cardVars, type TransportConfig, type CardFolder } from "./runner";
 import {
   COLUMNS, cardsIn as kernelCardsIn, moveCard as kernelMoveCard, claimCard, reclaimCard, recoverPendingClaims, readCard,
   latestClaim, claimantAlive, sameClaimant, self,
 } from "./kernel/card";
-import { askRoundGate, type DecisionPort } from "./decisions";
+import { askRoundGate, nullPort, type DecisionPort } from "./decisions";
+import { routeCard } from "./router";
 import { isolationMode, openWorktree, keepWorktree, discardWorktree } from "./isolation";
 import { appendEvent, readEvents as readKernelEvents, type LogEvent } from "./kernel/log";
 import { acceptRef as judge } from "./kernel/judge";
@@ -567,7 +568,19 @@ async function convergeCard(
   kind: "trivial" | "standard" | "hard",
 ): Promise<"converged" | "no-convergence" | "requeued"> {
   const conf = await import("./confidence");
-  const actorDir = join(dir("serfs"), "actor");
+  let actorDir = join(dir("serfs"), "actor");
+  let routerOn = false;
+  try {
+    routerOn = JSON.parse(readFileSync(join(config.root, ".bandit", "config.json"), "utf-8"))?.router === "folders";
+  } catch {
+    routerOn = false; // missing or bad JSON = router off
+  }
+  if (routerOn) {
+    const routed = await routeCard(config.root, {
+      id: card.id, title: card.frontmatter.title, task: String(cardVars(card).task ?? ""), frontmatter: card.frontmatter,
+    }, decisionPort ?? nullPort());
+    actorDir = join(dir("serfs"), routed.serf);
+  }
   const leverId = leverOf(card);
 
   // Round 0: plan consult before expensive attempts (non-trivial pipelines).
