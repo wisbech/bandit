@@ -27,9 +27,17 @@ requirement is that something is gone.
 | `measures` | `readMeasures`/`progressSince` in `src/measures.ts`, `bandit measures [--json]`: cost per accepted card, `.ts` lines under `src/`, ratified checks whose card passed, lines per check; `measure.read` event; change between the last two reads | `bun test ./tests/seed/measures.check.ts` | `tests/seed/measures.check.ts` |
 | `progress-order` | `leverProgress`/`orderFrontier`/`leverHistory` in `src/progress.ts`; `"order": "progress"` claims the backlog by lever progress (falling cost first, then unexplored, then known-flat) and parks levers flat 3 times (`card.parked`) | `bun test ./tests/seed/progress-order.check.ts` | `tests/seed/progress-order.check.ts` |
 | `shrink-check` | `shrinkReport` in `src/shrink.ts`, `bandit shrink-check [--base <ref>] [--path <dir>] [--json]`: exit 0 only when `git diff --numstat <base>...HEAD -- <path>` is net negative | `bun test ./tests/seed/shrink-check.check.ts` | `tests/seed/shrink-check.check.ts` |
+| `port-guard` | `protectedList`/`guard` in `src/port.ts`, `bandit guard [--json] [--repo <dir>] <path>...`: kernel list + `bandit.json` `protected` + ratified check paths; exit 0 allowed, 1 hit, 2 usage; read-only | `bun test ./tests/seed/port-guard.check.ts` | `tests/seed/port-guard.check.ts` |
+| `port-status` | `status` in `src/port-status.ts`, `bandit status [--json]`: columns, per-card verify/ratified/verdict (judge events only)/claimedBy, `lastEventTs`; read-only | `bun test ./tests/seed/port-status.check.ts` | `tests/seed/port-status.check.ts` |
+| `port-work` | `src/port-work.ts`, `bandit next` / `submit` / `release`: any harness claims a card (kernel `claimCard` + `openWorktree`, a `port.next` lease), hands back a change judged by the kernel `acceptRef`; the loop leaves a leased card alone | `bun test ./tests/seed/port-work.check.ts` | `tests/seed/port-work.check.ts` |
+| `adapters` | `adapters/`: the one-page port contract, a git pre-commit hook, a Claude Code mod (`tool.call` guard), a GitHub Actions accept template; glue that only calls the port | `bun test ./tests/seed/adapters.check.ts` | `tests/seed/adapters.check.ts` |
 
 No card touches the kernel. Each starts from the base tree alone and can be done in any order.
 The last three (the progress cards) were cut from `seed/kept-opus` `a8a4ebf`, not `21c5850`.
+The four port cards (`port-guard`, `port-status`, `port-work`, `adapters`) were cut from `seed/kept-opus` `d09f5e4`.
+They create separate files (`src/port.ts`, `src/port-status.ts`, `src/port-work.ts`, `adapters/`) so that
+keeping them in any order conflicts only in `src/cli.ts`'s `COMMANDS` table. `port-work` keeps its own copy of the
+protected list (`portProtected`) rather than importing `port-guard`'s; a later deletion card can merge the two.
 
 ## Deletion cards
 
@@ -88,6 +96,10 @@ bandit ratify folder-router     --paths tests/seed/folder-router.check.ts
 bandit ratify measures          --paths tests/seed/measures.check.ts
 bandit ratify progress-order    --paths tests/seed/progress-order.check.ts
 bandit ratify shrink-check      --paths tests/seed/shrink-check.check.ts
+bandit ratify port-guard        --paths tests/seed/port-guard.check.ts
+bandit ratify port-status       --paths tests/seed/port-status.check.ts
+bandit ratify port-work         --paths tests/seed/port-work.check.ts
+bandit ratify adapters          --paths tests/seed/adapters.check.ts
 ```
 
 `ratify` takes the verify argv from the card's `verify:` line and writes `checks/<id>.json` with the
@@ -125,6 +137,33 @@ progress-order 3 of 3, shrink-check 3 of 3), the other two checks stayed red, `b
 1 skip, 0 fail and `bunx tsc --noEmit` clean; then the tree was reverted to clean before the next card. So
 none of the three depends on another's change. That code was not kept. Default suite with the three checks
 added: `bun test` 177 pass, 1 skip, 0 fail; `bunx tsc --noEmit` clean.
+
+The port cards (base `seed/kept-opus` `d09f5e4`, bun 1.4.2):
+
+- `port-guard`: 20 of 20 fail; first, `existsSync(src/port.ts)` expected `true`, received `false`; `bandit guard` exits 1 (`unknown command: guard`) where 0 and 2 are expected.
+- `port-status`: 15 of 15 fail; first, `existsSync(src/port-status.ts)` expected `true`, received `false`; `bandit status --json` exits 1 (`unknown command: status`), expected 0.
+- `port-work`: 17 of 17 fail; first, `bandit next --json` prints no JSON (`unknown command: next`, exit 1); the empty-backlog case expects exit 3, received 1.
+- `adapters`: 22 of 22 fail; first, `existsSync(adapters/README.md)` expected `true`, received `false`; with no hook, staging `src/kernel/judge.ts` commits (exit 0, expected non-zero); `adapters/claude-code-mod/hooks/register.js` does not exist.
+
+Green-proof, one card at a time, in place on this tree: for each card a throwaway implementation of THAT card alone
+(written from the card's Task, nothing else applied) made its check green 3 runs of 3 (port-guard 20/20, port-status
+15/15, port-work 17/17, adapters 22/22) while the other three checks stayed red, `bun test` stayed 177 pass, 1 skip,
+0 fail and `bunx tsc --noEmit` clean; then the tree was reverted (`git checkout -- src/`, new files removed,
+`git status` showing only the seed files) before the next card. For `port-work` the loop check was also run with the
+throwaway `src/port-work.ts` but WITHOUT its one-line `src/loop.ts` condition: it fails (`card.reclaimed` for the held
+card), so the check proves the lease, not the verbs alone. That code was not kept.
+
+Notes for the port cards:
+
+- `port-work`'s lease is a `port.next` event naming the claim it extends (`pid` + `startedAt` of the `bandit next`
+  process that called `claimCard`) and a `leaseUntil`; `runLoop` skips an in-progress card while that lease is live and
+  reclaims it as a dead claim afterwards. No kernel change: `claimCard` and `latestClaim` are used as they are; the
+  decision to reclaim already lives in `src/loop.ts`. Known gap: `submit` does not re-check the lease while the judge
+  runs, so a lease that expires mid-judge can be reclaimed by a loop under it (the move then fails and `submit` exits 2).
+- `adapters`' Claude Code mod is built on code.claude.com/docs/en/plugins/mods (overview, events, reference, test,
+  v2.1.289); the card quotes the lines it relies on. `$.session.cwd()`'s return shape is not shown there; the card says
+  to `await` it. The check drives `register` with fakes, because the docs' own kit (`claude plugin test`) needs the
+  `claude` CLI.
 
 ## Notes for whoever runs Stage 1
 
