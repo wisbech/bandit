@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { runLoop, cardsIn, readEvents } from "./loop";
@@ -353,26 +353,8 @@ const COMMANDS: Command[] = [
           // dead v2 pid — stale marker, ignore
         }
       }
-      // Single-runner lock (the suspended-pid fix): a stale lock from a dead
-      // process is auto-cleared; a live one refuses with its pid.
-      const lockPath = join(banditDir(), "run.lock");
-      let visitor = false;
-      if (existsSync(lockPath)) {
-        try {
-          const lockPid = parseInt(readFileSync(lockPath, "utf-8").trim(), 10);
-          process.kill(lockPid, 0); // throws if dead
-          // Already running = the factory is live = open the door. You walk in
-          // as a visitor; no error, no kill needed.
-          visitor = true;
-          console.log("  ✓ bandit is live (pid " + lockPid + ") — opening the door (panes auto-open)");
-        } catch {
-          console.log("  · stale lock cleared (previous run died)");
-        }
-      }
-      if (!visitor) {
-        writeFileSync(lockPath, String(process.pid));
-        process.on("SIGINT", () => { try { unlinkSync(lockPath); } catch {} process.exit(0); });
-      }
+      // No lock: any number of loops may share a board. Each works only the
+      // cards it claims (kernel/card.ts claimCard); a claim is a rename.
       const cfg = JSON.parse(readFileSync(join(banditDir(), "config.json"), "utf-8"));
 
       // ── Launch config: flags > interactive picker > config.json ──
@@ -470,12 +452,10 @@ const COMMANDS: Command[] = [
         container: cfg.container || undefined,
         maxRetries: cfg.maxRetries ?? 3,
         once: args.includes("--once"),
-        readOnly: visitor, // visitors watch; the lock holder processes cards
         // Evidence-Preserving Reducer (SoL-Pi): optional cheap model that
         // compresses large gate logs into verified receipts.
         reducer: cfg.reducer ?? undefined,
       });
-      if (!visitor) { try { unlinkSync(lockPath); } catch {} }
     },
   },
   {
@@ -991,29 +971,19 @@ const COMMANDS: Command[] = [
       }
       add("Harness binary", binOk, binNote);
 
-      // 5. STALE LOCK (a dead factory holds the board hostage)
-      const lockPath = join(banditDir(), "run.lock");
-      if (!existsSync(lockPath)) add("Board lock", true, "no stale run.lock");
-      else {
-        const pid = parseInt(readFileSync(lockPath, "utf-8").trim(), 10);
-        let alive = false;
-        try { process.kill(parseInt(readFileSync(lockPath, "utf-8"), 10), 0); alive = true; } catch {}
-        add("Lock", true, alive ? `run.lock held by live pid ${readFileSync(lockPath, "utf-8")} — visitors join as watch-only` : `stale run.lock (pid dead) — will auto-clear on next start`, !alive);
-      }
-
-      // 6. DECISIONS port (optional organ — warn-only when absent)
+      // 5. DECISIONS port (optional organ — warn-only when absent)
       const { loadDecisionConfig } = await import("./decisions");
       const dcfg = loadDecisionConfig(process.cwd());
       add("Decisions port", true, dcfg ? `${dcfg.evaluator} configured (graded judging)` : "none configured — grading falls to the classifier seat (advisory)", !dcfg);
 
-      // 7. BUDGETS sanity: any card over its own limit still on the frontier?
+      // 6. BUDGETS sanity: any card over its own limit still on the frontier?
       const { cardsIn, readEvents } = await import("./loop");
       const frontier = [...cardsIn("backlog" as never), ...cardsIn("in-progress" as never)] as { id: string; frontmatter: Record<string, string> }[];
       // limit 0/absent = no budget (matches the loop's budgetExhausted), not "exhausted at zero"
       const stuck = frontier.filter((c) => { const limit = parseInt(c.frontmatter.budgetLimit ?? "0", 10); return limit > 0 && parseInt(c.frontmatter.lifetimeTokensUsed ?? "0", 10) >= limit; });
       add("Budgets", stuck.length === 0, stuck.length === 0 ? "no frontier card over budget" : `budget-exhausted on frontier: ${stuck.map((c) => c.id).join(", ")} (start will skip them)`);
 
-      // 8. EVENT FLOW: is the factory breathing?
+      // 7. EVENT FLOW: is the factory breathing?
       const events = readEvents();
       const today = new Date().toISOString().slice(0, 10);
       const todayEvents = events.filter((e) => String(e.ts).startsWith(today));

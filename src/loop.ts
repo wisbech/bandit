@@ -23,7 +23,6 @@ export interface LoopConfig {
   container?: string;
   maxRetries?: number;
   once?: boolean;
-  readOnly?: boolean;         // visitor: watch + heartbeat, never process cards
   reducer?: { command: string; args: string[] }; // Evidence-Preserving Reducer (cheap model)
   workDir?: string;           // per card, isolation mode: the card's worktree (default: root)
   branch?: string;            // per card, isolation mode: bandit/<card-id>, carried by `converged`
@@ -993,7 +992,6 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     }, 60_000);
     let waking = false;
     const wake = async () => {
-      if (config.readOnly) return; // visitors observe; the lock holder processes
       if (kernelCardsIn(config.root, "backlog").length === 0 && kernelCardsIn(config.root, "in-progress").length === 0) return;
       waking = true;
       try {

@@ -16,7 +16,7 @@ bandit ships in **one edition with three operating modes** of the same product:
 | :--- | :--- | :--- |
 | A factory in this project | `bandit init` | `.bandit/` — board (4 columns), events/, serfs/ (master, critic, actor, researcher, architect), harnesses/, config.json |
 | Prove it on a task | `bandit task "do the thing" --accept "test passes"` | A card folder in `.bandit/board/backlog/` |
-| Drive the board | `bandit start --once` (or persistent by default) | run.lock, card outputs, events, grading records |
+| Drive the board | `bandit start --once` (or persistent by default) | card outputs, events (card.claimed), grading records |
 
 Most users want headless. Pick paned if you want to watch and steer mid-run. Both modes share the same board — switch by config, not by reinstall.
 
@@ -162,7 +162,6 @@ Success = the card is in `done/`, `bandit doctor` is green, and the dossier tell
 
 | Symptom | Fix |
 |---|---|
-| `bandit start` says visitor (watch-only) | another loop holds `run.lock` — that's by design; or clear it if the pid is dead (`bandit doctor` flags this) |
 | Rounds take ~10 min each on ollama | model cold-load + `OLLAMA_NUM_PARALLEL=1`; set `OLLAMA_KEEP_ALIVE=30m` for the ollama server and prefer one factory per model |
 | `transport.empty_output` events | opencode was killed before any event; check `opencode` works standalone with the same prompt; the loop retries 3× before transport-red |
 | Grader passes but gate red (dossier flags ⚠ contradiction) | the seat's confidence is self-reported fiction; the gate is the truth — check the verification command itself |

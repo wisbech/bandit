@@ -112,7 +112,7 @@ The converged condition is deliberately conservative: green verification AND (gr
 
 - **Card budget** is frontmatter (`budgetLimit`, `lifetimeTokensUsed`) — durable across restarts; an exhausted card refuses further runs.
 - **Run budget**: per-run timeout + stall detection (0% CPU for 60s → kill). A hung agent is killed, not waited on.
-- **Single-runner lock** (`run.lock`) with stale-lock auto-clear; a live lock makes the second `bandit start` a *visitor* — you join the running factory instead of doubling it.
+- **Claims, no lock**: a claim is a rename `backlog/<id>` to `in-progress/<id>` with one winner; each loop works only its own claims, and a dead claimant's card is reclaimed. Any number of `bandit start` loops can share a board.
 - **Verification gate**: a card is only green when its reported command exits 0. Gate fingerprints make repeated identical failures visible.
 
 ## Recursion

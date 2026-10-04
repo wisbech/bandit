@@ -73,7 +73,8 @@ describe("fix 2: wake reentrancy guard", () => {
     const done = () => readEvents().filter((e) => e.type === "card.completed").length >= 3 && cardsIn("in-progress").length === 0;
     for (let t = 0; t < 150 && !done(); t++) await Bun.sleep(100);
     await Bun.sleep(1500); // grace window: a duplicate pass would show up here
-    cfg.readOnly = true; // neuter the orphaned watcher before afterEach deletes the board
+    // The orphaned watcher stays bound to this root (config.root); once afterEach
+    // deletes the board its wake finds no cards and does nothing.
     const prompts = readFileSync(log, "utf-8").split("@@PROMPT_END@@").filter((p) => p.includes("ACTOR_MARK"));
     const completedEv = readEvents().filter((e) => e.type === "card.completed");
     for (const id of ["wake-a", "wake-b", "wake-c"]) {
