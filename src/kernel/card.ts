@@ -2,8 +2,8 @@
 // Parsing, finding, listing and moving cards, and splitting a card's verify:
 // command into argv. Paths come from an explicit board root, never cwd.
 
-import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, readdirSync, renameSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 export const COLUMNS = ["backlog", "in-progress", "review", "done"] as const;
 export type Column = (typeof COLUMNS)[number];
@@ -28,9 +28,12 @@ export function parseCard(dir: string): CardFolder {
     }
     body = raw.slice(fmMatch[0].length);
   }
+  // The directory is the only truth for the column. A `column:` line in old
+  // cards is ignored; it only names the column of a folder off the board.
+  const parent = basename(dirname(dir)) as Column;
   return {
     id: dir.split("/").pop()!,
-    column: (frontmatter.column as Column) ?? "backlog",
+    column: COLUMNS.includes(parent) ? parent : ((frontmatter.column as Column) ?? "backlog"),
     dir,
     frontmatter,
     body,
@@ -61,9 +64,6 @@ export function moveCard(root: string, card: CardFolder, to: Column): void {
   const current = findCardDir(root, card.id) ?? card.dir;
   const target = join(root, ".bandit", "board", to, card.id);
   renameSync(current, target);
-  const cardMd = join(target, "card.md");
-  const raw = readFileSync(cardMd, "utf-8").replace(/^column: .+$/m, `column: ${to}`);
-  writeFileSync(cardMd, raw);
 }
 
 // Whitespace split that honours double and single quotes (no escapes, no

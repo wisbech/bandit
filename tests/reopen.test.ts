@@ -27,7 +27,7 @@ test("reopenCard moves a card from any column to backlog and emits card.moved by
   reopenCard(root, "stuck-card", "gate was misconfigured");
   const to = join(root, ".bandit", "board", "backlog", "stuck-card");
   expect(existsSync(from)).toBe(false);
-  expect(readFileSync(join(to, "card.md"), "utf-8")).toContain("column: backlog");
+  expect(existsSync(join(to, "card.md"))).toBe(true); // the folder is the column; card.md is not rewritten
   const ev = readEvents().find((e) => e.type === "card.moved" && e.card === "stuck-card");
   expect(ev).toMatchObject({ to: "backlog", by: "hand", reason: "gate was misconfigured" });
 });
