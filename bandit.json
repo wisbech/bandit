@@ -1,0 +1,4 @@
+{
+  "setup": [["bun", "install", "--frozen-lockfile"]],
+  "gates": [["bun", "test", "--timeout", "30000"], ["bunx", "tsc", "--noEmit"]]
+}

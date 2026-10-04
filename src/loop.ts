@@ -9,6 +9,7 @@ import { askRoundGate, type DecisionPort } from "./decisions";
 import { isolationMode, openWorktree, keepWorktree, discardWorktree } from "./isolation";
 import { appendEvent, readEvents as readKernelEvents, type LogEvent } from "./kernel/log";
 import { acceptRef as judge } from "./kernel/judge";
+import { readScore } from "./kernel/score";
 
 // The decision port (dependency inversion): the loop consumes this interface
 // only. Adapters (systemone/laya, jev, future evaluators) live elsewhere and
@@ -955,7 +956,10 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
         } else {
           try {
             const v = await judge({ root, cardId: card.id, ref: kept.branch, base: wt.base });
-            if (v.passed) verdict = v.sha;
+            if (v.passed) {
+              verdict = v.sha;
+              try { readScore(root, root); } catch {} // recorded, never a gate
+            }
             else judgeFailure = { branch: kept.branch, sha: v.sha, gates: v.gates.map((g) => ({ name: g.name, exitCode: g.exitCode, argv: g.argv })) };
           } catch (e) {
             judgeFailure = { branch: kept.branch, error: String(e instanceof Error ? e.message : e).slice(0, 200) };

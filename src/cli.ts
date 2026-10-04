@@ -288,6 +288,23 @@ const COMMANDS: Command[] = [
     },
   },
   {
+    name: "score",
+    summary: "bandit score — run bandit.json's score argv in this tree, log score.read, print the number; exit 0, or 2 when no score is configured or its output is not a number",
+    fn: async () => {
+      const { readScore, scoreArgv } = await import("./kernel/score");
+      try {
+        if (!scoreArgv(process.cwd())) { console.error('no "score" in bandit.json'); process.exit(2); }
+        const v = readScore(process.cwd(), process.cwd());
+        if (v === null) { console.error("score output is not a JSON number or {\"score\": <number>}"); process.exit(2); }
+        console.log(v);
+        process.exit(0);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      }
+    },
+  },
+  {
     name: "ratify",
     summary: 'human-only: pin a card\'s check: bandit ratify <card-id> --paths <p1,p2,...> [--verify "<cmd>"] — writes checks/<card-id>.json; you commit it on the base branch',
     fn: async (args) => {
