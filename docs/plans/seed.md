@@ -227,3 +227,33 @@ Known gaps in `progress-order`, stated by the check's author: parking is permane
 Zero accepted from three finished cards and 672,574 tokens after about three hours of wall time, part of which the
 machine was asleep. Against Opus: 14 accepted at about 75,000 tokens each. The numbers above came from the new
 `bandit cost` verb run on that board, its first real use.
+
+## Wave 4: the port — a harness-neutral interface (5 Oct 2026)
+
+John: "Let us not target Claude only — make this simple process something that can be pluggable in mods etc."
+The process is now reachable by any host through a handful of verbs. Each takes argv, prints one JSON object on the
+last stdout line and exits with a meaningful code. Contract: `adapters/README.md`.
+
+| Verb | Role for a host |
+|---|---|
+| `guard <path>...` | ask before an edit whether a path is protected |
+| `next` / `submit <id>` / `release <id>` | be the worker: take a card and its isolated worktree, hand the work to the judge, or give it back |
+| `status` | draw the board; a card shows passed only when the judge logged it |
+| `accept <card> --ref` | judge any branch, commit or pull request |
+
+Adapters, each only calling the port: a git pre-commit hook, a Claude Code mod that guards Edit and Write, and a
+GitHub Actions template that judges a pull request for the card named in its body.
+
+**Built by the mid-tier model.** All four cards were built by Sonnet workers and accepted by the judge on the first
+attempt, at about 81,000 tokens per accepted card (Opus on the earlier cards: about 75,000). First like-for-like
+evidence that with a ratified check and a precise card, the mid-tier model is enough for this kind of work.
+
+**Live test** in a throwaway clone: `next` returned a card with its worktree and a two-hour lease; a file was written
+there by an outside process; `guard` refused a kernel path; `submit` committed, ran setup, the card's check and both
+project gates, moved the card to done and logged the verdict; `status` showed it passed; the log verified intact.
+
+Totals on `seed/kept-opus`: 18 of 18 cards accepted, all checks pass together, suite 177 pass, 1 skip, 0 fail.
+
+Known gaps: the Claude Code mod is tested against a fake host only (this machine runs 2.1.285, mods need 2.1.287),
+and it covers Edit and Write, not notebook or multi-file edits. `submit` does not renew its lease while the judge runs.
+A port-held card is protected from the loop by one condition in `src/loop.ts`, not by the kernel.
