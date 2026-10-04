@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { parseCard, findCardDir, runSerfOnCard, parseGate, type TransportConfig, type CardFolder } from "./runner";
 import {
@@ -512,35 +512,6 @@ function recordSpend(card: CardFolder, tokens: number): void {
   } else {
     writeFileSync(cardMd, raw.replace(/^---$/m, `---\nlifetimeTokensUsed: ${updated}`));
   }
-}
-
-// ── EVENT-SOURCED REPLAY REPAIR (rebuild the board projection from events) ──
-
-export function repairBoardFromEvents(): { moved: number; repaired: string[] } {
-  const events = readEvents();
-  const moved: string[] = [];
-  const repaired: string[] = [];
-  // Latest card.moved event per card wins.
-  const latest = new Map<string, { to: string; ts: string }>();
-  for (const e of events) {
-    if (e.type === "card.moved" || e.type === "card.completed" || e.type === "task.failed") {
-      const cardId = String((e as Record<string, unknown>).card ?? (e as Record<string, unknown>).payload);
-      const to = e.type === "card.completed" ? "done" : e.type === "task.failed" ? "review" : String((e as Record<string, unknown>).to ?? "");
-      if (cardId && to) latest.set(cardId, { to, ts: String(e.ts) });
-    }
-  }
-  for (const [cardId, { to }] of latest) {
-    for (const col of COLUMNS) {
-      if (col === to) continue;
-      const candidate = dir("board", col, cardId);
-      if (existsSync(join(candidate, "card.md"))) {
-        renameSync(candidate, dir("board", to, cardId));
-        moved.push(`${cardId}: ${col} → ${to}`);
-      }
-    }
-    if (existsSync(join(dir("board", to, cardId), "card.md"))) repaired.push(cardId);
-  }
-  return { moved: moved.length, repaired };
 }
 
 // ── AMEND ROUTING (the loop re-opens its own review cards) ──
