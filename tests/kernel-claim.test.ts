@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, chmodSync, r
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { runLoop } from "../src/loop";
-import { claimCard, moveCard, latestClaim, self, cardsIn, processStart } from "../src/kernel/card";
+import { claimCard, moveCard, latestClaim, self, cardsIn, processStart, readCard, claimantAlive } from "../src/kernel/card";
 import { appendEvent, readEvents } from "../src/kernel/log";
 import { seedDefaultFolders } from "./v30-helpers";
 
@@ -47,6 +47,20 @@ test("fenced move fails (returns false) when the card is not in the named column
   expect(col("f1")).toBe("review");
   expect(moveCard(root, "f1", "review", "backlog")).toBe(true);
   expect(col("f1")).toBe("backlog");
+});
+
+test("a card claimed between listing and reading is skipped, not a crash", () => {
+  seedCard("gone");
+  const dir = join(root, ".bandit", "board", "backlog", "gone");
+  expect(claimCard(root, "gone")).toBe(true); // another loop won it after we listed backlog
+  expect(readCard(dir)).toBeNull();
+  expect(cardsIn(root, "backlog")).toEqual([]);
+});
+
+test("liveness: a dead pid is dead; a live pid with another start time is dead; ours is alive", () => {
+  expect(claimantAlive(self())).toBe(true);
+  expect(claimantAlive({ pid: process.pid, startedAt: "Thu Jan 1 00:00:00 1970" })).toBe(false);
+  expect(claimantAlive({ pid: 2 ** 22 + 7, startedAt: self().startedAt })).toBe(false);
 });
 
 test("claimCard: one winner, the loser gets false; card.claimed carries pid and process start time", () => {
@@ -122,8 +136,12 @@ test("two processes on one board of 12 cards: every card claimed exactly once, n
     `console.log("RESULT " + JSON.stringify(r));`,
   ].join("\n"));
   const procs = [0, 1].map(() => Bun.spawn(["bun", script, root, stub], { cwd: root, stdout: "pipe", stderr: "pipe" }));
-  const outs = await Promise.all(procs.map(async (p) => { await p.exited; return await new Response(p.stdout).text(); }));
-  const results = outs.map((o) => JSON.parse(o.match(/RESULT (.+)/)![1]));
+  const outs = await Promise.all(procs.map(async (p) => {
+    const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    return { out, err };
+  }));
+  for (const o of outs) expect({ result: /RESULT /.test(o.out), stderr: /RESULT /.test(o.out) ? "" : o.err.slice(-2000) }).toEqual({ result: true, stderr: "" });
+  const results = outs.map((o) => JSON.parse(o.out.match(/RESULT (.+)/)![1]));
   expect(results[0].processed + results[1].processed).toBe(12);
 
   const ev = readEvents(root);

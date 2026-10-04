@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rename
 import { join } from "node:path";
 import { parseCard, findCardDir, runSerfOnCard, parseGate, type TransportConfig, type CardFolder } from "./runner";
 import {
-  COLUMNS, cardsIn as kernelCardsIn, moveCard as kernelMoveCard, claimCard, reclaimCard, recoverPendingClaims,
+  COLUMNS, cardsIn as kernelCardsIn, moveCard as kernelMoveCard, claimCard, reclaimCard, recoverPendingClaims, readCard,
   latestClaim, claimantAlive, sameClaimant, self,
 } from "./kernel/card";
 import { askRoundGate, type DecisionPort } from "./decisions";
@@ -912,8 +912,8 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
   const frontier = [...mine, ...kernelCardsIn(root, "backlog").map((c) => c.id)];
   for (const id of frontier) {
     const liveDir = findCardDir(root, id);
-    if (!liveDir) continue;
-    const liveCard = parseCard(liveDir);
+    const liveCard = liveDir ? readCard(liveDir) : null;
+    if (!liveDir || !liveCard) continue; // moved under us: another loop's now
     if (budgetExhausted(liveCard)) {
       emit("card.budget_exhausted", { card: id });
       console.log(`  ⊘ ${id}: budget exhausted — skipping`);

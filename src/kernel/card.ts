@@ -61,9 +61,19 @@ export function cardsIn(root: string, column: Column): CardFolder[] {
   return readdirSync(colDir)
     .filter((name) => !name.startsWith(".")) // .<id>.<pid>: a claim in flight
     .sort() // frontier order = id order (APFS readdir is hash order); numbered titles run in sequence
-    .map((name) => join(colDir, name))
-    .filter((d) => existsSync(join(d, "card.md")))
-    .map((d) => parseCard(d));
+    .map((name) => readCard(join(colDir, name)))
+    .filter((c): c is CardFolder => c !== null);
+}
+
+// parseCard, or null when the folder is gone: another loop may claim or move
+// a card between listing a column and reading its card.md.
+export function readCard(dir: string): CardFolder | null {
+  try {
+    return parseCard(dir);
+  } catch (e) {
+    if ((e as { code?: string }).code === "ENOENT") return null;
+    throw e;
+  }
 }
 
 // A rename that lost a race: the source is gone or the target is taken.
@@ -105,9 +115,23 @@ export function self(): Claimant {
 
 export const sameClaimant = (a: Claimant, b: Claimant): boolean => a.pid === b.pid && a.startedAt === b.startedAt;
 
+// kill(pid, 0) is a syscall, not a fork: it cannot fail under load the way ps can.
+export function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as { code?: string }).code === "EPERM"; // exists, not ours
+  }
+}
+
+// Dead = no such pid, or the pid now names a process with another start
+// time. When ps cannot be read the claimant is assumed alive: a wrong
+// "alive" only delays a reclaim, a wrong "dead" works a card twice.
 export function claimantAlive(c: Claimant): boolean {
+  if (!pidAlive(c.pid)) return false;
   const now = processStart(c.pid);
-  return now !== null && (c.startedAt === "unknown" || now === c.startedAt);
+  return now === null || c.startedAt === "unknown" || now === c.startedAt;
 }
 
 export function latestClaim(root: string, id: string): Claimant | null {
@@ -129,7 +153,12 @@ export function claimCard(root: string, id: string, claimant: Claimant = self())
     throw e;
   }
   appendEvent(root, "card.claimed", { card: id, pid: claimant.pid, startedAt: claimant.startedAt });
-  renameSync(pending, join(board, "in-progress", id));
+  try {
+    renameSync(pending, join(board, "in-progress", id));
+  } catch (e) {
+    if (lostRace(e)) return false; // recovered from under us as if we were dead
+    throw e;
+  }
   return true;
 }
 
@@ -147,7 +176,7 @@ export function recoverPendingClaims(root: string): void {
   if (!existsSync(dir)) return;
   for (const name of readdirSync(dir)) {
     const m = name.match(/^\.(.+)\.(\d+)$/);
-    if (!m || processStart(Number(m[2])) !== null) continue;
+    if (!m || pidAlive(Number(m[2]))) continue;
     try {
       renameSync(join(dir, name), join(root, ".bandit", "board", "backlog", m[1]));
       appendEvent(root, "card.reclaimed", { card: m[1], from: { pid: Number(m[2]) } });
