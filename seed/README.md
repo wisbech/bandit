@@ -24,8 +24,33 @@ requirement is that something is gone.
 | `bench` | `bandit bench <board-dir> [--json]`: frozen board in a temp git project, judged, one JSON line out, temp removed | `bun test ./tests/seed/bench.check.ts` | `tests/seed/bench.check.ts` |
 | `keep-rule` | `keepDecision(pairs, total?)` in `src/keep-rule.ts`: paired sign test, abort at -2, keep at +5, token tie-break | `bun test ./tests/seed/keep-rule.check.ts` | `tests/seed/keep-rule.check.ts` |
 | `folder-router` | `routeCard`/`routeCandidates` in `src/router.ts`: serf folders and their `## Mission` are the routing table, picked by the port's Choice; `"router": "folders"` makes the loop run the routed folder as the actor | `bun test ./tests/seed/folder-router.check.ts` | `tests/seed/folder-router.check.ts` |
+| `measures` | `readMeasures`/`progressSince` in `src/measures.ts`, `bandit measures [--json]`: cost per accepted card, `.ts` lines under `src/`, ratified checks whose card passed, lines per check; `measure.read` event; change between the last two reads | `bun test ./tests/seed/measures.check.ts` | `tests/seed/measures.check.ts` |
+| `progress-order` | `leverProgress`/`orderFrontier`/`leverHistory` in `src/progress.ts`; `"order": "progress"` claims the backlog by lever progress (falling cost first, then unexplored, then known-flat) and parks levers flat 3 times (`card.parked`) | `bun test ./tests/seed/progress-order.check.ts` | `tests/seed/progress-order.check.ts` |
+| `shrink-check` | `shrinkReport` in `src/shrink.ts`, `bandit shrink-check [--base <ref>] [--path <dir>] [--json]`: exit 0 only when `git diff --numstat <base>...HEAD -- <path>` is net negative | `bun test ./tests/seed/shrink-check.check.ts` | `tests/seed/shrink-check.check.ts` |
 
 No card touches the kernel. Each starts from the base tree alone and can be done in any order.
+The last three (the progress cards) were cut from `seed/kept-opus` `a8a4ebf`, not `21c5850`.
+
+## Deletion cards
+
+A deletion card is an ordinary card whose `verify:` asks for a net line drop, for example
+
+```
+verify: bun src/shrink.ts --base main
+```
+
+(once `shrink-check` is accepted; `bun src/cli.ts shrink-check --base main` is the same verb). The judge runs
+that argv and the project gates in `bandit.json` (`bun test`, `bunx tsc --noEmit`) on the same commit, so the
+card passes only when the branch removes more lines than it adds under `src/` AND every test and type check
+stays green: check-preserving deletion, the compression-progress "discovery". Write the `## Task` as what to
+remove or merge; `--path` narrows the measured directory.
+
+Ratify with the verb's own file as the check path: `bandit ratify <id> --paths src/shrink.ts`. The judge runs
+`verify` from the candidate's tree, so without that pin a candidate could pass by editing the verb; this is
+why `src/shrink.ts` runs on its own and imports only node builtins (`src/cli.ts` stays free to shrink).
+Caveat: the gates keep the *remaining* tests green. Deleting a test under `tests/` does not count toward the
+net drop under `src/`, but nothing stops it either; review the diff's test deletions, or add the specific
+tests the deletion must keep to the card's `--paths`.
 
 ## Why the checks do not run in `bun test`
 
@@ -60,6 +85,9 @@ bandit ratify cost-report       --paths tests/seed/cost-report.check.ts
 bandit ratify bench             --paths tests/seed/bench.check.ts
 bandit ratify keep-rule         --paths tests/seed/keep-rule.check.ts
 bandit ratify folder-router     --paths tests/seed/folder-router.check.ts
+bandit ratify measures          --paths tests/seed/measures.check.ts
+bandit ratify progress-order    --paths tests/seed/progress-order.check.ts
+bandit ratify shrink-check      --paths tests/seed/shrink-check.check.ts
 ```
 
 `ratify` takes the verify argv from the card's `verify:` line and writes `checks/<id>.json` with the
@@ -84,6 +112,19 @@ One line per card: the verify argv, and the first failing assertion observed.
 
 Default suite on the same commit with these files added: `bun test` 178 pass, 1 skip, 0 fail;
 `bunx tsc --noEmit` clean.
+
+The progress cards (base `seed/kept-opus` `a8a4ebf`, bun 1.4.2):
+
+- `measures`: 9 of 9 fail; first, `existsSync(src/measures.ts)` expected `true`, received `false`; `bandit measures --json` exits 1 (`unknown command: measures`), expected 0.
+- `progress-order`: 28 of 29 fail; first, `existsSync(src/progress.ts)` expected `true`, received `false`; the loop check claims `a-flat, b-new, c-hot, d-none, e-stuck, f-first` (id order), expected `f-first, c-hot, b-new, d-none, e-stuck` with `a-flat` parked. The one that passes is the default-config guard (no `order` key: id order, no `card.parked`), which must stay green.
+- `shrink-check`: 17 of 17 fail; first, `existsSync(src/shrink.ts)` expected `true`, received `false`; `bandit shrink-check` exits 1 (`unknown command`) where 0 and 2 are expected, and prints no JSON where 1 is.
+
+Green-proof, one card at a time: for each of the three, a throwaway implementation of THAT card alone was
+applied to a clean tree (base plus the check files, nothing else), its check ran green (measures 3 runs of 3,
+progress-order 3 of 3, shrink-check 3 of 3), the other two checks stayed red, `bun test` stayed 177 pass,
+1 skip, 0 fail and `bunx tsc --noEmit` clean; then the tree was reverted to clean before the next card. So
+none of the three depends on another's change. That code was not kept. Default suite with the three checks
+added: `bun test` 177 pass, 1 skip, 0 fail; `bunx tsc --noEmit` clean.
 
 ## Notes for whoever runs Stage 1
 
