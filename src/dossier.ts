@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { readEvents } from "./loop";
+import { readEvents } from "./kernel/log";
 
 // dossier.ts — `bandit card <id>`: the card dossier (visibility plan §3.1).
 // A pure projection over existing state: the event log, the card folder,
@@ -235,7 +235,7 @@ function probeScratch(path: string): { bytes: number; files: number } | null {
 export function renderCardDossier(root: string, cardId: string): string {
   const lines: string[] = [];
   const cardDir = findCardDir(root, cardId);
-  const events = readEvents().filter((e) => e.card === cardId);
+  const events = readEvents(root).filter((e) => e.card === cardId);
   lines.push(`╔══ CARD DOSSIER ═══════════════════════════════════════`);
   lines.push(`  id: ${cardId}`);
 
@@ -336,7 +336,7 @@ export function renderCardDossier(root: string, cardId: string): string {
 const CARD_COLUMNS = ["backlog", "in-progress", "review", "done"] as const;
 
 export function findCardDir(root: string, cardId: string): string | null {
-  const moved = [...readEvents().filter((e) => e.card === cardId)]
+  const moved = [...readEvents(root).filter((e) => e.card === cardId)]
     .reverse()
     .find((e) => e.type === "card.moved" && e.to !== undefined);
   const order = moved ? [String(moved.to), ...CARD_COLUMNS] : [...CARD_COLUMNS];
