@@ -101,8 +101,20 @@ export function shouldTrigger(root: string): { trigger: boolean; reason: string 
   return { trigger: false, reason: "no threshold reached" };
 }
 
+// Events since the last "refine" pass; all events if no pass has run yet.
 function readEventsWindow(root: string): LogEvent[] {
-  return readEvents(root);
+  const path = join(root, REFINE_DIR, "history.jsonl");
+  let since: string | undefined;
+  if (existsSync(path)) {
+    for (const line of readFileSync(path, "utf-8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry?.action === "refine" && typeof entry.ts === "string") since = entry.ts;
+      } catch {}
+    }
+  }
+  return since ? readEvents(root, since) : readEvents(root);
 }
 
 // ── SNAPSHOTS + ROLLBACK ──
