@@ -1,0 +1,14 @@
+{
+  "card": "folder-router",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/folder-router.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/folder-router.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/folder-router.check.ts": "85a42538a87dbb23ad8ecfdc2e1f5c67a6877ae5c609042b301db3a94a2cba05"
+  }
+}
