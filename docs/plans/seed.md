@@ -156,3 +156,41 @@ imports only node builtins and itself, enforced by a test.
 
 Stage 1: write and ratify the twelve seed cards, then run the backlog twice on the same cards, once with the
 cheap model and once with Opus subagents, each into its own integration branch. Add cards for items 2, 3 and 5 above.
+
+---
+
+# Stage 1 readout: the seed backlog (4 Oct 2026)
+
+John's instruction: build from a fresh branch off `main`, and do not stop for interaction unless gridlocked. The kernel
+pull request was merged, `seed/stage1` was cut from `main`, and the checks were ratified by the planning agent as
+John's delegate.
+
+## Setup
+
+- **Checks first.** Opus wrote eleven cards with failing checks (`seed/cards/`, `tests/seed/*.check.ts`, `scripts/seed/`). Each was red on the base tree and proven able to go green with a throwaway implementation. Checks are named `.check.ts` so the default suite skips them. All were ratified into `checks/<id>.json`; `tests/seed/`, `scripts/seed/` and `seed/` are protected in `bandit.json`.
+- **Two workers, same cards.** Opus subagents (one per card, own worktree, branch `opus/<id>`), judged by `bandit accept` from a separate clone. The cheap model (`glm-5.3-flash` through headless opencode, the 30 Sep setup) through bandit's own loop with worktree isolation in a second clone.
+
+## Opus workers
+
+| Wave | Cards | Judge verdict |
+|---|---|---|
+| 1, base `1439b08` | keep-rule, idle-timeout, refiner-window, drop-repair-board, prompts-tracked, refiner-proposals, failure-draft, cost-report, bench | 9 passed |
+| 1 | no-heartbeat | worker declined: the check cannot pass on this base |
+| 2, base `96bf770` (wave 1 merged) | no-heartbeat, folder-router | 2 passed |
+
+- **11 of 11 cards accepted**, 10 on the first attempt. About 75,000 tokens and one to four minutes per accepted card. Writing the eleven checks cost about 420,000 tokens.
+- **Body of work:** `seed/kept-opus`. Eleven judged branches merged with the verdict sha in each merge message. Ten merged cleanly. One (`bench` after `cost-report`) conflicted in `src/cli.ts` where both added a command at the same place; resolved by hand, first wrongly (a broken brace, caught by the type check), then correctly. On the integrated branch all eleven checks pass together and the suite is 177 pass, 1 skip, 0 fail.
+
+## What the run taught
+
+1. **One check was wrong, and the system surfaced it honestly.** The no-heartbeat check also counted a timer owned by the idle-timeout card, so it could not pass alone. The worker reported that and did not touch the protected check. Independence of cards must be proven when checks are written: run each green-proof against the base tree alone, not all together.
+2. **The judge gave one false failure under load.** With five workers running the suite at once, a gate hit a test timeout. Re-judged on a quiet machine, it passed. The judge needs either exclusive use of the machine or a rule that a timeout is retried once and logged.
+3. **Integration is a step the judge does not cover.** Each branch was judged against the base alone; merging them needed a conflict resolution that no check owned. `keep: merge` into an integration branch, with the judge run on the merged result, is the missing piece (seed card 12 in the plan).
+4. **Ratified checks held.** No candidate touched a check, the kernel or the manifests, and the judge used the ratified command every time.
+5. **Folder as structure and router.** The router card makes the worker folders the routing table: each folder's mission text is an option, the decision model picks one, a `serf:` line on the card overrides it, and anything unsure falls back to the default worker. It is opt-in with `"router": "folders"`.
+
+## Cheap-model run
+
+In progress when this was written: after thirty minutes it was on round 3 of its first card (`bench`, the hardest),
+with about 149,000 tokens used on that card and one five-minute stall killed by the watchdog. Results are appended
+below when the run ends.
