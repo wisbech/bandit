@@ -1,0 +1,14 @@
+{
+  "card": "shrink-check",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/shrink-check.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/shrink-check.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/shrink-check.check.ts": "08fbff38257416f2f81290093fafa9b4afd5519bb2ce0d582adf40d820b78333"
+  }
+}

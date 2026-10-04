@@ -1,0 +1,14 @@
+{
+  "card": "progress-order",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/progress-order.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/progress-order.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/progress-order.check.ts": "94c50a49b6b04063010d84298aa3701b6524da6a35d68f5da5656f75c7354356"
+  }
+}

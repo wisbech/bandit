@@ -1,0 +1,14 @@
+{
+  "card": "measures",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/measures.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/measures.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/measures.check.ts": "da195fe70d8e13faa476519ba53631890959f6cf51e83b12ffcbef118e7a0ca1"
+  }
+}
