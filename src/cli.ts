@@ -4,6 +4,7 @@ import { execSync } from "node:child_process";
 import { runLoop, cardsIn, readEvents } from "./loop";
 import { dossierCardDir } from "./dossier";
 import { validateVerifyCommand } from "./verify";
+import { appendEvent } from "./kernel/log";
 
 // cli.ts — command table (~30 lines). No switch-casing.
 
@@ -315,6 +316,23 @@ const COMMANDS: Command[] = [
         for (const c of r.results) console.log(`  ${c.id}  rounds ${c.rounds}  tokens ${c.tokens}  accepted ${c.accepted ? "yes" : "no"}`);
         if (r.results.length === 0) console.log("  (no cards)");
         console.log(`  total: ${r.cards} card(s), ${r.accepted} accepted, ${r.rounds} round(s), ${r.tokens} tokens, cost per accepted card ${r.costPerAccepted ?? "n/a"}`);
+      }
+    },
+  },
+  {
+    name: "measures",
+    summary: "bandit measures [--json] — cost per accepted card and source lines per ratified check; logs measure.read",
+    fn: async (args) => {
+      const { readMeasures, progressSince } = await import("./measures");
+      const root = process.cwd();
+      const m = readMeasures(root);
+      appendEvent(root, "measure.read", { costPerAccepted: m.costPerAccepted, sourceLines: m.sourceLines, ratifiedChecks: m.ratifiedChecks, linesPerCheck: m.linesPerCheck });
+      if (args.includes("--json")) console.log(JSON.stringify(m));
+      else {
+        for (const [k, v] of Object.entries(m)) console.log(`  ${k} ${v ?? "n/a"}`);
+        const p = progressSince(root);
+        const d = (c: { delta: number } | null) => (c ? String(c.delta) : "n/a");
+        console.log(`  change since last read: costPerAccepted ${d(p.costPerAccepted)}, linesPerCheck ${d(p.linesPerCheck)}`);
       }
     },
   },
