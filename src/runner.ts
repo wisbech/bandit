@@ -107,6 +107,7 @@ export interface TransportConfig {
   args: string[];    // e.g. ["run", "--model", "..."]
   env?: Record<string, string>;      // extra env for the agent process
   timeoutMs?: number;                // per-run override
+  idleTimeoutMs?: number;            // headless: kill after this long with no stream event (default 300_000)
   capabilities?: HarnessCapabilities; // what this harness advertises
   model?: string;                    // ACP: session model preference ("provider/id" or bare id)
   gateway?: { baseUrl: string; headers: Record<string, string> }; // ACP client-managed LLM routing
@@ -220,32 +221,28 @@ export async function runTransport(cfg: TransportConfig, prompt: string, cwd: st
       stderr: "pipe",
       env: { ...process.env, TMPDIR: scratch, OLLAMA_KEEP_ALIVE: process.env.OLLAMA_KEEP_ALIVE ?? "30m" },
     });
-    const startedAt = Date.now();
-    const timer = setTimeout(() => proc.kill(), timeoutMs);
-
     const result = await new Promise<{ stdout: string; exitCode: number; stalled: boolean }>((resolve) => {
       let done = false;
-      const finish = (stalled: boolean) => {
+      const settle = (exitCode: number, stalled: boolean) => {
         if (done) return;
         done = true;
-        clearInterval(idleWatch);
-        resolve({ stdout: collected, exitCode: -1, stalled });
+        clearTimeout(idle);
+        clearTimeout(runTimer);
+        resolve({ stdout: collected, exitCode, stalled });
       };
-      // Liveness by event arrival: an agent emitting events is working. The
-      // grace covers model load (no events yet is expected then).
-      const eventIdleLimit = 300_000; // 5 min without ANY event = stuck
-      let lastEventAt = Date.now();
+      const kill = () => { try { proc.kill(); } catch {} settle(-1, true); };
+      // Liveness by event arrival: an agent emitting events is working. One
+      // timeout, reset by every event; the default covers model load (no events
+      // yet is expected then).
+      const eventIdleLimit = cfg.idleTimeoutMs ?? 300_000; // 5 min without ANY event = stuck
+      const onIdle = () => {
+        console.log(`      ⊘ agent idle (${Math.round(eventIdleLimit / 1000)}s since last event) — killing`);
+        kill();
+      };
+      let idle = setTimeout(onIdle, eventIdleLimit);
+      const runTimer = setTimeout(kill, timeoutMs);
       let collected = "";
       let writeStream: import("bun").FileSink | null = null;
-      const idleWatch = setInterval(() => {
-        const elapsed = Date.now() - startedAt;
-        if (elapsed > timeoutMs) { try { proc.kill(); } catch {} finish(true); return; }
-        if (Date.now() - lastEventAt > eventIdleLimit) {
-          console.log(`      ⊘ agent idle (${Math.round(eventIdleLimit / 1000)}s since last event) — killing`);
-          try { proc.kill(); } catch {}
-          finish(true);
-        }
-      }, 10_000);
       // Stream: read stdout line-by-line; each line IS an event. Persist it
       // immediately (the file becomes the live transcript for watch/dossier).
       (async () => {
@@ -262,7 +259,7 @@ export async function runTransport(cfg: TransportConfig, prompt: string, cwd: st
               const line = buf.slice(0, nl).trim();
               buf = buf.slice(nl + 1);
               if (!line) continue;
-              lastEventAt = Date.now();
+              if (!done) { clearTimeout(idle); idle = setTimeout(onIdle, eventIdleLimit); }
               collected += line + "\n";
               if (streamJson) {
                 if (!writeStream) writeStream = Bun.file(outputPath).writer();
@@ -273,12 +270,7 @@ export async function runTransport(cfg: TransportConfig, prompt: string, cwd: st
           if (writeStream) writeStream.flush();
         } catch {}
       })();
-      proc.exited.then((code) => {
-        if (done) return;
-        done = true;
-        clearInterval(idleWatch);
-        resolve({ stdout: collected, exitCode: code, stalled: false });
-      });
+      proc.exited.then((code) => settle(code, false));
     });
     // stderr is the only place a harness explains an early exit (auth, rate limit,
     // crash). Drain it (a full pipe would block the child) and keep it beside the run.
@@ -292,10 +284,8 @@ export async function runTransport(cfg: TransportConfig, prompt: string, cwd: st
       // keep the raw event stream beside the text: tool inputs/outputs are the only record of what the agent did
       writeFileSync(outputPath.replace(/\.md$/, ".events.jsonl"), result.stdout);
       writeFileSync(outputPath, text);
-      clearTimeout(timer);
       return { ok: !result.stalled && result.exitCode === 0, output: text, tokensUsed: tokens > 0 ? tokens : Math.ceil(text.length / 4), exitCode: result.exitCode, stalled: result.stalled };
     }
-    clearTimeout(timer);
     writeFileSync(outputPath, result.stdout);
     return { ok: !result.stalled && result.exitCode === 0, output: result.stdout, tokensUsed: Math.ceil(result.stdout.length / 4), exitCode: result.exitCode, stalled: result.stalled };
   }
