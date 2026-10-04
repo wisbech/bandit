@@ -92,7 +92,7 @@ describe("V3-7: specialist capability capture", () => {
 // failing every verdict; the wrap itself is still asserted by containerStage below.
 const containerRunning = (() => {
   try {
-    const p = Bun.spawnSync(["docker", "inspect", "-f", "{{.State.Running}}", "tradingroom-dev"], { stdout: "pipe", stderr: "pipe" });
+    const p = Bun.spawnSync(["docker", "inspect", "-f", "{{.State.Running}}", "tradingroom-dev"], { stdout: "pipe", stderr: "pipe", timeout: 3000 }); // a hung docker daemon must not hang the suite (4 Oct 2026: it did, for every verdict)
     return p.exitCode === 0 && p.stdout.toString().trim() === "true";
   } catch {
     return false; // docker not installed

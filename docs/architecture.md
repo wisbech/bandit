@@ -74,7 +74,7 @@ Acceptance criteria drive the gate; the `## Lever` section links the card to the
 {"type":"verification.green","ts":"2026-09-18T12:19:02Z","card":"write-hello-txt-…","round":1}
 ```
 
-The board is a *projection* over events. `repairBoardFromEvents()` replays the log and moves folders to where the last event says they belong — a crashed run, an accidentally moved card, or a corrupted projection repairs itself on replay. This is the event-sourcing discipline: state is derivable, truth is the log.
+The card's folder is the only truth for its column (`src/kernel/card.ts`); the event log is an append-only audit record of what happened, not a source the board is rebuilt from.
 
 Core event types: `card.created` `card.moved` `pipeline.selected` `plan.started` `plan.finished` `plan.rejected` `round.started` `verification.green` `verification.red` `gate.selfverify` `critic.verdict` `critic.repair` `critic.bypass` `grader.gate_contradiction` `consult.opened` `consult.turn` `consult.decided` `consult.routed` `consult.summoned` `consult.reweighed` `consult.failed` `card.requeued` `card.amend_limit` `converged` `card.completed` `task.failed` `specialist.spawned` `serf.spawned` `card.budget_exhausted`.
 

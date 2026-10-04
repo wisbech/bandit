@@ -1,0 +1,15 @@
+{
+  "card": "idle-timeout",
+  "verify": [
+    "bash",
+    "scripts/seed/idle-timeout.sh"
+  ],
+  "checkPaths": [
+    "tests/seed/idle-timeout.check.ts",
+    "scripts/seed/idle-timeout.sh"
+  ],
+  "sha256": {
+    "tests/seed/idle-timeout.check.ts": "c23263c104685508016b7010b077287a40da245a0eeb3ae16dee2d0f80d95013",
+    "scripts/seed/idle-timeout.sh": "fae173f0dbe4c05aa14c44993bab07d93cca7a8783ee919abfa13ae7f7e9b5c6"
+  }
+}

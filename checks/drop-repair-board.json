@@ -1,0 +1,15 @@
+{
+  "card": "drop-repair-board",
+  "verify": [
+    "bash",
+    "scripts/seed/drop-repair-board.sh"
+  ],
+  "checkPaths": [
+    "tests/seed/drop-repair-board.check.ts",
+    "scripts/seed/drop-repair-board.sh"
+  ],
+  "sha256": {
+    "tests/seed/drop-repair-board.check.ts": "40ada076ba53278785f905a6ec5f34d6aaf60757012ab673022e340f1c310884",
+    "scripts/seed/drop-repair-board.sh": "8b1f7b91607acdc0bba16bca9868d88806597d42587070699b5575ed55f12106"
+  }
+}

@@ -156,3 +156,104 @@ imports only node builtins and itself, enforced by a test.
 
 Stage 1: write and ratify the twelve seed cards, then run the backlog twice on the same cards, once with the
 cheap model and once with Opus subagents, each into its own integration branch. Add cards for items 2, 3 and 5 above.
+
+---
+
+# Stage 1 readout: the seed backlog (4 Oct 2026)
+
+John's instruction: build from a fresh branch off `main`, and do not stop for interaction unless gridlocked. The kernel
+pull request was merged, `seed/stage1` was cut from `main`, and the checks were ratified by the planning agent as
+John's delegate.
+
+## Setup
+
+- **Checks first.** Opus wrote eleven cards with failing checks (`seed/cards/`, `tests/seed/*.check.ts`, `scripts/seed/`). Each was red on the base tree and proven able to go green with a throwaway implementation. Checks are named `.check.ts` so the default suite skips them. All were ratified into `checks/<id>.json`; `tests/seed/`, `scripts/seed/` and `seed/` are protected in `bandit.json`.
+- **Two workers, same cards.** Opus subagents (one per card, own worktree, branch `opus/<id>`), judged by `bandit accept` from a separate clone. The cheap model (`glm-5.3-flash` through headless opencode, the 30 Sep setup) through bandit's own loop with worktree isolation in a second clone.
+
+## Opus workers
+
+| Wave | Cards | Judge verdict |
+|---|---|---|
+| 1, base `1439b08` | keep-rule, idle-timeout, refiner-window, drop-repair-board, prompts-tracked, refiner-proposals, failure-draft, cost-report, bench | 9 passed |
+| 1 | no-heartbeat | worker declined: the check cannot pass on this base |
+| 2, base `96bf770` (wave 1 merged) | no-heartbeat, folder-router | 2 passed |
+
+- **11 of 11 cards accepted**, 10 on the first attempt. About 75,000 tokens and one to four minutes per accepted card. Writing the eleven checks cost about 420,000 tokens.
+- **Body of work:** `seed/kept-opus`. Eleven judged branches merged with the verdict sha in each merge message. Ten merged cleanly. One (`bench` after `cost-report`) conflicted in `src/cli.ts` where both added a command at the same place; resolved by hand, first wrongly (a broken brace, caught by the type check), then correctly. On the integrated branch all eleven checks pass together and the suite is 177 pass, 1 skip, 0 fail.
+
+## What the run taught
+
+1. **One check was wrong, and the system surfaced it honestly.** The no-heartbeat check also counted a timer owned by the idle-timeout card, so it could not pass alone. The worker reported that and did not touch the protected check. Independence of cards must be proven when checks are written: run each green-proof against the base tree alone, not all together.
+2. **The judge gave one false failure under load.** With five workers running the suite at once, a gate hit a test timeout. Re-judged on a quiet machine, it passed. The judge needs either exclusive use of the machine or a rule that a timeout is retried once and logged.
+3. **Integration is a step the judge does not cover.** Each branch was judged against the base alone; merging them needed a conflict resolution that no check owned. `keep: merge` into an integration branch, with the judge run on the merged result, is the missing piece (seed card 12 in the plan).
+4. **Ratified checks held.** No candidate touched a check, the kernel or the manifests, and the judge used the ratified command every time.
+5. **Folder as structure and router.** The router card makes the worker folders the routing table: each folder's mission text is an option, the decision model picks one, a `serf:` line on the card overrides it, and anything unsure falls back to the default worker. It is opt-in with `"router": "folders"`.
+
+## Cheap-model run
+
+In progress when this was written: after thirty minutes it was on round 3 of its first card (`bench`, the hardest),
+with about 149,000 tokens used on that card and one five-minute stall killed by the watchdog. Results are appended
+below when the run ends.
+
+## Wave 3: compression progress (4 Oct 2026, evening)
+
+After Schmidhuber's compression-progress paper: the scaffold is the compressor, progress is the fall in cost per
+accepted card, and the bandit should pull where cost is falling. Three more cards, written with checks proven
+independent one at a time, built by Opus workers, all accepted and merged:
+
+- `measures`: `bandit measures` records cost per accepted card and source lines per passing ratified check, and reports the change since the last reading.
+- `progress-order`: opt-in backlog ordering by each lever's recent improvement; a lever flat three times is parked.
+- `shrink-check`: `bandit shrink-check` passes only when a branch removes more source lines than it adds. A deletion card uses it as its check.
+
+Totals on `seed/kept-opus`: 14 of 14 cards accepted, all fourteen checks pass together, suite 177 pass, 1 skip, 0 fail.
+First readings on this branch: 6,901 source lines; net +578 lines against `main`. The seed grew the code; no deletion card has been run yet.
+
+Known gaps in `progress-order`, stated by the check's author: parking is permanent (no revive path), a pull is a whole card, and the history has no time window.
+
+## Two more environment findings
+
+- **Docker.** The suite hung on every verdict for a while. Cause: a test probed Docker with no time limit and the Docker daemon on this machine had stopped answering. The probe now has a 3 s limit.
+- **Idle sleep.** Tests and gates were "taking" fifteen minutes and failing their time limits because the computer idle-slept mid-run. Three verdicts failed for that reason and passed when re-run awake. A judge needs a machine that stays awake, and a timeout verdict should be distinguishable from a real failure.
+
+## Cheap-model run, interim (same ten cards, 30 Sep setup)
+
+| Card | Rounds | Tokens | Outcome |
+|---|---|---|---|
+| bench | 3 | 303,603 | requeued by the master (amend) |
+| cost-report | 3 | 162,634 | requeued by the master (amend) |
+| drop-repair-board | 3 | 129,044 | review, no convergence |
+| failure-draft | 2 so far | 77,293 | in progress |
+
+Zero accepted from three finished cards and 672,574 tokens after about three hours of wall time, part of which the
+machine was asleep. Against Opus: 14 accepted at about 75,000 tokens each. The numbers above came from the new
+`bandit cost` verb run on that board, its first real use.
+
+## Wave 4: the port — a harness-neutral interface (5 Oct 2026)
+
+John: "Let us not target Claude only — make this simple process something that can be pluggable in mods etc."
+The process is now reachable by any host through a handful of verbs. Each takes argv, prints one JSON object on the
+last stdout line and exits with a meaningful code. Contract: `adapters/README.md`.
+
+| Verb | Role for a host |
+|---|---|
+| `guard <path>...` | ask before an edit whether a path is protected |
+| `next` / `submit <id>` / `release <id>` | be the worker: take a card and its isolated worktree, hand the work to the judge, or give it back |
+| `status` | draw the board; a card shows passed only when the judge logged it |
+| `accept <card> --ref` | judge any branch, commit or pull request |
+
+Adapters, each only calling the port: a git pre-commit hook, a Claude Code mod that guards Edit and Write, and a
+GitHub Actions template that judges a pull request for the card named in its body.
+
+**Built by the mid-tier model.** All four cards were built by Sonnet workers and accepted by the judge on the first
+attempt, at about 81,000 tokens per accepted card (Opus on the earlier cards: about 75,000). First like-for-like
+evidence that with a ratified check and a precise card, the mid-tier model is enough for this kind of work.
+
+**Live test** in a throwaway clone: `next` returned a card with its worktree and a two-hour lease; a file was written
+there by an outside process; `guard` refused a kernel path; `submit` committed, ran setup, the card's check and both
+project gates, moved the card to done and logged the verdict; `status` showed it passed; the log verified intact.
+
+Totals on `seed/kept-opus`: 18 of 18 cards accepted, all checks pass together, suite 177 pass, 1 skip, 0 fail.
+
+Known gaps: the Claude Code mod is tested against a fake host only (this machine runs 2.1.285, mods need 2.1.287),
+and it covers Edit and Write, not notebook or multi-file edits. `submit` does not renew its lease while the judge runs.
+A port-held card is protected from the loop by one condition in `src/loop.ts`, not by the kernel.

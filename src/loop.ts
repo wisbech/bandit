@@ -1,15 +1,18 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { parseCard, findCardDir, runSerfOnCard, parseGate, type TransportConfig, type CardFolder } from "./runner";
+import { parseCard, findCardDir, runSerfOnCard, parseGate, cardVars, type TransportConfig, type CardFolder } from "./runner";
 import {
   COLUMNS, cardsIn as kernelCardsIn, moveCard as kernelMoveCard, claimCard, reclaimCard, recoverPendingClaims, readCard,
   latestClaim, claimantAlive, sameClaimant, self,
 } from "./kernel/card";
-import { askRoundGate, type DecisionPort } from "./decisions";
+import { askRoundGate, nullPort, type DecisionPort } from "./decisions";
+import { routeCard } from "./router";
+import { heldByPort } from "./port-work";
 import { isolationMode, openWorktree, keepWorktree, discardWorktree } from "./isolation";
 import { appendEvent, readEvents as readKernelEvents, type LogEvent } from "./kernel/log";
 import { acceptRef as judge } from "./kernel/judge";
 import { readScore } from "./kernel/score";
+import { leverOf, leverHistory, leverProgress, orderFrontier } from "./progress";
 
 // The decision port (dependency inversion): the loop consumes this interface
 // only. Adapters (systemone/laya, jev, future evaluators) live elsewhere and
@@ -514,35 +517,6 @@ function recordSpend(card: CardFolder, tokens: number): void {
   }
 }
 
-// ── EVENT-SOURCED REPLAY REPAIR (rebuild the board projection from events) ──
-
-export function repairBoardFromEvents(): { moved: number; repaired: string[] } {
-  const events = readEvents();
-  const moved: string[] = [];
-  const repaired: string[] = [];
-  // Latest card.moved event per card wins.
-  const latest = new Map<string, { to: string; ts: string }>();
-  for (const e of events) {
-    if (e.type === "card.moved" || e.type === "card.completed" || e.type === "task.failed") {
-      const cardId = String((e as Record<string, unknown>).card ?? (e as Record<string, unknown>).payload);
-      const to = e.type === "card.completed" ? "done" : e.type === "task.failed" ? "review" : String((e as Record<string, unknown>).to ?? "");
-      if (cardId && to) latest.set(cardId, { to, ts: String(e.ts) });
-    }
-  }
-  for (const [cardId, { to }] of latest) {
-    for (const col of COLUMNS) {
-      if (col === to) continue;
-      const candidate = dir("board", col, cardId);
-      if (existsSync(join(candidate, "card.md"))) {
-        renameSync(candidate, dir("board", to, cardId));
-        moved.push(`${cardId}: ${col} → ${to}`);
-      }
-    }
-    if (existsSync(join(dir("board", to, cardId), "card.md"))) repaired.push(cardId);
-  }
-  return { moved: moved.length, repaired };
-}
-
 // ── AMEND ROUTING (the loop re-opens its own review cards) ──
 // A master "amend" route used to rot in review: the loop only drains
 // in-progress + backlog, so the card waited for a human board move — the
@@ -576,15 +550,6 @@ function recordAmendRequeue(card: CardFolder): void {
 // any expensive attempt. Spawn a specialist serf when the same missing
 // capability is cited in two consecutive round triages.
 
-function leverOf(card: CardFolder): string | null {
-  const fm = slugify(card.frontmatter.lever ?? "");
-  if (fm) return `lever:${fm}`;
-  const m = card.body.match(/## Lever\n([\s\S]*?)(?=\n## |$)/m);
-  const first = m?.[1]?.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
-  const slug = first ? slugify(first).slice(0, 48).replace(/-$/, "") : "";
-  return slug ? `lever:${slug}` : null;
-}
-
 function slugify(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
@@ -596,7 +561,19 @@ async function convergeCard(
   kind: "trivial" | "standard" | "hard",
 ): Promise<"converged" | "no-convergence" | "requeued"> {
   const conf = await import("./confidence");
-  const actorDir = join(dir("serfs"), "actor");
+  let actorDir = join(dir("serfs"), "actor");
+  let routerOn = false;
+  try {
+    routerOn = JSON.parse(readFileSync(join(config.root, ".bandit", "config.json"), "utf-8"))?.router === "folders";
+  } catch {
+    routerOn = false; // missing or bad JSON = router off
+  }
+  if (routerOn) {
+    const routed = await routeCard(config.root, {
+      id: card.id, title: card.frontmatter.title, task: String(cardVars(card).task ?? ""), frontmatter: card.frontmatter,
+    }, decisionPort ?? nullPort());
+    actorDir = join(dir("serfs"), routed.serf);
+  }
   const leverId = leverOf(card);
 
   // Round 0: plan consult before expensive attempts (non-trivial pipelines).
@@ -889,6 +866,44 @@ async function convergeCard(
   return "no-convergence";
 }
 
+// Rule 5: a failure writes the next card, unratified. The draft sits in
+// .bandit/drafts/ (not a board column) with no `verify:` until a human
+// writes and ratifies its check.
+export function writeFailureDraft(root: string, cardId: string): string {
+  const draftId = `${cardId}-retry`;
+  const cardDir = findCardDir(root, cardId);
+  const red = readKernelEvents(root).filter((e) => e.type === "verification.red" && e.card === cardId).pop();
+  const cardVerify = cardDir ? parseCard(cardDir).frontmatter.verify : undefined;
+  const command = String(red?.command || cardVerify || "(none)").replace(/\s+/g, " ").slice(0, 500);
+  const logPath = cardDir ? join(cardDir, "verification-output.log") : "";
+  const tail = logPath && existsSync(logPath) ? readFileSync(logPath, "utf-8").slice(-2000).replace(/```/g, "'''") : "";
+  const md = [
+    "---",
+    `id: ${draftId}`,
+    `title: retry ${cardId}: a smaller step`,
+    "---",
+    `# retry ${cardId}: a smaller step`,
+    "",
+    `Failed card: ${cardId}`,
+    "",
+    `Last gate: ${command}`,
+    "",
+    "```",
+    tail,
+    "```",
+    "",
+    "## Task",
+    `Take one smaller step toward ${cardId}: make the first failing part of the gate above pass, and nothing else.`,
+    "",
+  ].join("\n");
+  const dir = join(root, ".bandit", "drafts", draftId);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "card.md");
+  writeFileSync(path, md);
+  appendEvent(root, "card.drafted", { card: cardId, draft: draftId, path });
+  return path;
+}
+
 export async function runLoop(config: LoopConfig): Promise<{ processed: number; completed: number; failed: number }> {
   ensureScaffold();
   let processed = 0, completed = 0, failed = 0;
@@ -909,9 +924,28 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
   for (const c of kernelCardsIn(root, "in-progress")) {
     const claim = latestClaim(root, c.id);
     if (claim && sameClaimant(claim, self())) mine.push(c.id);
+    else if (heldByPort(root, c.id)) { /* the port holds it */ }
     else if (!claim || !claimantAlive(claim)) reclaimCard(root, c.id, claim);
   }
-  const frontier = [...mine, ...kernelCardsIn(root, "backlog").map((c) => c.id)];
+  let progressOrder = false;
+  try {
+    progressOrder = JSON.parse(readFileSync(join(root, ".bandit", "config.json"), "utf-8"))?.order === "progress";
+  } catch {
+    progressOrder = false; // missing or bad JSON = id order
+  }
+  const backlog = kernelCardsIn(root, "backlog");
+  let backlogOrder = backlog.map((c) => c.id);
+  if (progressOrder) {
+    // Pull where cost is falling; park levers that stayed flat (they stay in backlog).
+    const stats = leverProgress(leverHistory(root));
+    const { order, parked } = orderFrontier(backlog.map((c) => ({ id: c.id, lever: leverOf(c) })), stats);
+    for (const id of parked) {
+      const lever = leverOf(backlog.find((c) => c.id === id)!)!;
+      emit("card.parked", { card: id, lever, flat: stats[lever].flat });
+    }
+    backlogOrder = order;
+  }
+  const frontier = [...mine, ...backlogOrder];
   for (const id of frontier) {
     const liveDir = findCardDir(root, id);
     const liveCard = liveDir ? readCard(liveDir) : null;
@@ -973,6 +1007,7 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     if (result === "converged" && judgeFailure) {
       if (exitInProgress(root, card.id, "review")) {
         emit("task.failed", { card: card.id, reason: "judge", ...judgeFailure });
+        writeFailureDraft(root, card.id);
         failed += 1;
       }
     } else if (result === "converged") {
@@ -986,6 +1021,7 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
       exitInProgress(root, card.id, "backlog");
     } else if (exitInProgress(root, card.id, "review")) {
       emit("task.failed", { card: card.id, reason: "no-convergence", attempts: maxRetries });
+      writeFailureDraft(root, card.id);
       failed += 1;
     }
   }
@@ -1012,11 +1048,6 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     const backlogDir = join(config.root, ".bandit", "board", "backlog");
     const inProgressDir = join(config.root, ".bandit", "board", "in-progress");
     console.log("  ◌ board drained — watching for new cards (event-driven, Ctrl+C to stop)\n");
-    // visible liveness: one heartbeat per minute so holding never looks stuck
-    const heartbeat = setInterval(() => {
-      const t = new Date().toTimeString().slice(0, 8);
-      console.log("  ◌ " + t + " watching… (board empty)");
-    }, 60_000);
     let waking = false;
     const wake = async () => {
       if (kernelCardsIn(config.root, "backlog").length === 0 && kernelCardsIn(config.root, "in-progress").length === 0) return;

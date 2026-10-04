@@ -1,0 +1,29 @@
+name: bandit accept
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+jobs:
+  accept:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - id: card
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          id=$(printf '%s\n' "$PR_BODY" | sed -n 's/^bandit-card:[[:space:]]*\([A-Za-z0-9._-]*\)[[:space:]]*$/\1/p' | head -n 1)
+          if [ -z "$id" ]; then echo "::notice::no bandit-card: line in the PR body; skipping bandit accept"; fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+      - if: steps.card.outputs.id != ''
+        env:
+          CARD: ${{ steps.card.outputs.id }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BANDIT_CARDS_DIR: seed/cards
+        run: |
+          git branch -f main "origin/$BASE_REF"
+          if [ ! -e ".bandit/board/backlog/$CARD/card.md" ]; then mkdir -p .bandit/board/backlog && cp -R "$BANDIT_CARDS_DIR/$CARD" .bandit/board/backlog/; fi
+          bun src/cli.ts accept "$CARD" --ref "$HEAD_SHA"

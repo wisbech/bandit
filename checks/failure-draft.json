@@ -1,0 +1,14 @@
+{
+  "card": "failure-draft",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/failure-draft.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/failure-draft.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/failure-draft.check.ts": "03c64bad7624fe6b9b485fb864c0cdce1a7c877228e5824fd9158b618c53559b"
+  }
+}

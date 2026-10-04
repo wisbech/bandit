@@ -1,0 +1,14 @@
+{
+  "card": "bench",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/bench.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/bench.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/bench.check.ts": "a1ec21182a4e000f7dbe95bf1d80084e1850d7a7d833e6460eec61c01e8d23e0"
+  }
+}

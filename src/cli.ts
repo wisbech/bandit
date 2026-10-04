@@ -4,6 +4,9 @@ import { execSync } from "node:child_process";
 import { runLoop, cardsIn, readEvents } from "./loop";
 import { dossierCardDir } from "./dossier";
 import { validateVerifyCommand } from "./verify";
+import { appendEvent } from "./kernel/log";
+import { shrinkMain } from "./shrink";
+import { guard } from "./port";
 
 // cli.ts — command table (~30 lines). No switch-casing.
 
@@ -288,6 +291,84 @@ const COMMANDS: Command[] = [
     },
   },
   {
+    name: "next",
+    summary: "bandit next [--json] [--id <card>] [--lease-min N] — claim the next backlog card for an external worker; exit 0 card, 3 none, 2 usage",
+    fn: async (args) => {
+      const usage = "usage: bandit next [--json] [--id <card>] [--lease-min N]";
+      const die = (m: string): never => { console.error(`${m}\n${usage}`); process.exit(2); };
+      const opts: { id?: string; leaseMin?: number } = {};
+      let json = false;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === "--json") json = true;
+        else if (a === "--id" || a === "--lease-min") {
+          const v = args[++i];
+          if (v === undefined || v.startsWith("--")) die(`${a} needs a value`);
+          if (a === "--id") opts.id = v;
+          else {
+            const n = v.trim() === "" ? NaN : Number(v);
+            if (!Number.isFinite(n) || n < 0) die("--lease-min must be a number >= 0");
+            opts.leaseMin = n;
+          }
+        } else die(`unknown flag: ${a}`);
+      }
+      if (!existsSync(join(process.cwd(), ".bandit", "board"))) die("no .bandit/board here");
+      const { portNext, PortError } = await import("./port-work");
+      try {
+        const c = portNext(process.cwd(), opts);
+        if (!c) { console.log(json ? JSON.stringify({ id: null }) : "no card to claim"); process.exit(3); }
+        console.log(json ? JSON.stringify(c) : `${c.id}  ${c.title}\n  work in ${c.workDir} (branch ${c.branch}), lease until ${c.leaseUntil}`);
+        process.exit(0);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(e instanceof PortError ? e.code : 2);
+      }
+    },
+  },
+  {
+    name: "submit",
+    summary: "bandit submit <id> [--json] [--message <m>] — judge the worktree a port worker leaves; exit 0 pass, 1 fail, 2 usage",
+    fn: async (args) => {
+      const usage = "usage: bandit submit <id> [--json] [--message <m>]";
+      const id = args[0];
+      if (!id || id.startsWith("--")) { console.error(usage); process.exit(2); }
+      let json = false;
+      let message: string | undefined;
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === "--json") json = true;
+        else if (args[i] === "--message" && args[i + 1] !== undefined) message = args[++i];
+        else { console.error(usage); process.exit(2); }
+      }
+      const { portSubmit } = await import("./port-work");
+      try {
+        const r = await portSubmit(process.cwd(), id, { message });
+        console.log(json ? JSON.stringify(r) : `${r.passed ? "PASSED" : "FAILED"} ${id} at ${r.sha.slice(0, 12)} on ${r.branch}`);
+        process.exit(r.passed ? 0 : 1);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      }
+    },
+  },
+  {
+    name: "release",
+    summary: "bandit release <id> [--json] — give a port-held card back to backlog; exit 0, 2 on errors",
+    fn: async (args) => {
+      const usage = "usage: bandit release <id> [--json]";
+      const id = args[0];
+      if (!id || id.startsWith("--") || args.slice(1).some((a) => a !== "--json")) { console.error(usage); process.exit(2); }
+      const { portRelease } = await import("./port-work");
+      try {
+        portRelease(process.cwd(), id);
+        console.log(args.includes("--json") ? JSON.stringify({ id, released: true }) : `released ${id}`);
+        process.exit(0);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      }
+    },
+  },
+  {
     name: "score",
     summary: "bandit score — run bandit.json's score argv in this tree, log score.read, print the number; exit 0, or 2 when no score is configured or its output is not a number",
     fn: async () => {
@@ -303,6 +384,59 @@ const COMMANDS: Command[] = [
         process.exit(2);
       }
     },
+  },
+  {
+    name: "cost",
+    summary: "bandit cost [--json] — rounds, tokens and judge verdict per card from the event log; cost per accepted card",
+    fn: async (args) => {
+      const { costReport } = await import("./cost");
+      const r = costReport(process.cwd());
+      if (args.includes("--json")) console.log(JSON.stringify(r));
+      else {
+        for (const c of r.results) console.log(`  ${c.id}  rounds ${c.rounds}  tokens ${c.tokens}  accepted ${c.accepted ? "yes" : "no"}`);
+        if (r.results.length === 0) console.log("  (no cards)");
+        console.log(`  total: ${r.cards} card(s), ${r.accepted} accepted, ${r.rounds} round(s), ${r.tokens} tokens, cost per accepted card ${r.costPerAccepted ?? "n/a"}`);
+      }
+    },
+  },
+  {
+    name: "measures",
+    summary: "bandit measures [--json] — cost per accepted card and source lines per ratified check; logs measure.read",
+    fn: async (args) => {
+      const { readMeasures, progressSince } = await import("./measures");
+      const root = process.cwd();
+      const m = readMeasures(root);
+      appendEvent(root, "measure.read", { costPerAccepted: m.costPerAccepted, sourceLines: m.sourceLines, ratifiedChecks: m.ratifiedChecks, linesPerCheck: m.linesPerCheck });
+      if (args.includes("--json")) console.log(JSON.stringify(m));
+      else {
+        for (const [k, v] of Object.entries(m)) console.log(`  ${k} ${v ?? "n/a"}`);
+        const p = progressSince(root);
+        const d = (c: { delta: number } | null) => (c ? String(c.delta) : "n/a");
+        console.log(`  change since last read: costPerAccepted ${d(p.costPerAccepted)}, linesPerCheck ${d(p.linesPerCheck)}`);
+      }
+    },
+  },
+  {
+    name: "bench",
+    summary: "bandit bench <board-dir> [--json] — run a frozen board once in a temp project; last stdout line is the JSON report",
+    fn: async (args) => {
+      const dirArg = args.find((a) => !a.startsWith("--"));
+      const { statSync } = await import("node:fs");
+      if (!dirArg || !existsSync(dirArg) || !statSync(dirArg).isDirectory()) {
+        console.error("usage: bandit bench <board-dir> [--json]");
+        process.exit(2);
+      }
+      const { resolve } = await import("node:path");
+      const { runBench } = await import("./bench");
+      const report = await runBench(process.cwd(), resolve(dirArg));
+      console.log(JSON.stringify(report));
+      process.exit(0);
+    },
+  },
+  {
+    name: "shrink-check",
+    summary: "bandit shrink-check [--base <ref>] [--path <dir>] [--json]",
+    fn: (args) => process.exit(shrinkMain(args)),
   },
   {
     name: "ratify",
@@ -527,6 +661,27 @@ const COMMANDS: Command[] = [
         console.log(`  ${ok ? "INTACT" : "BROKEN"}: ${r.segments.length} segment(s), ${r.preGenesis.length} pre-genesis file(s)`);
       }
       process.exit(ok ? 0 : 1);
+    },
+  },
+  {
+    name: "prompts",
+    summary: "bandit prompts export [--force] — copy .bandit/serfs/<name>/prompt.md to tracked prompts/<name>/prompt.md",
+    fn: async (args) => {
+      if (args[0] !== "export") { console.error("usage: bandit prompts export [--force]"); process.exit(2); }
+      const { copyFileSync } = await import("node:fs");
+      const force = args.includes("--force");
+      const serfsDir = join(process.cwd(), ".bandit", "serfs");
+      const names = existsSync(serfsDir) ? readdirSync(serfsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) : [];
+      for (const name of names) {
+        const src = join(serfsDir, name, "prompt.md");
+        if (!existsSync(src)) continue;
+        const dst = join(process.cwd(), "prompts", name, "prompt.md");
+        if (existsSync(dst) && !force) { console.log(`  kept    prompts/${name}/prompt.md`); continue; }
+        mkdirSync(join(process.cwd(), "prompts", name), { recursive: true });
+        copyFileSync(src, dst);
+        console.log(`  written prompts/${name}/prompt.md`);
+      }
+      process.exit(0);
     },
   },
   {
@@ -1042,6 +1197,44 @@ const COMMANDS: Command[] = [
       }
       console.log(`\n  ${failed === 0 ? "healthy — all checks pass" : failed + " check(s) failed"}${failed === 0 && checks.some((c) => c.warn) ? " (warnings present)" : ""}\n`);
       if (failed > 0) process.exitCode = 1;
+    },
+  },
+  {
+    name: "guard",
+    summary: "may I edit these paths? bandit guard [--json] [--repo <dir>] <path>... — exit 0 allowed, 1 any hit, 2 usage",
+    fn: (args) => {
+      const usage = "usage: bandit guard [--json] [--repo <dir>] <path>...";
+      let json = false;
+      let repo = process.cwd();
+      const paths: string[] = [];
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === "--json") json = true;
+        else if (a === "--repo") {
+          const v = args[++i];
+          if (v === undefined) { console.error(usage); process.exit(2); }
+          repo = v;
+        } else if (a.startsWith("--")) { console.error(usage); process.exit(2); }
+        else paths.push(a);
+      }
+      if (paths.length === 0) { console.error(usage); process.exit(2); }
+      const result = guard(repo, paths);
+      if (json) console.log(JSON.stringify(result));
+      else for (const h of result.hits) console.log(h);
+      process.exit(result.allowed ? 0 : 1);
+    },
+  },
+  {
+    name: "status",
+    summary: "read-only board snapshot (bandit status [--json])",
+    fn: async (args) => {
+      const { status } = await import("./port-status");
+      const s = status(process.cwd());
+      if (args.includes("--json")) { console.log(JSON.stringify(s)); return; }
+      for (const c of s.cards) {
+        console.log(`  ${c.column.padEnd(11)} ${c.id} ${c.verdict ?? "-"} ${c.ratified ? "ratified" : "-"}${c.claimedBy ? ` pid ${c.claimedBy.pid}` : ""}`);
+      }
+      console.log(s.lastEventTs ? `  last event ${s.lastEventTs}` : "  no events");
     },
   },
   {

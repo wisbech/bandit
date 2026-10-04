@@ -1,0 +1,22 @@
+#!/bin/sh
+# bandit guard as a git pre-commit hook. Thin glue: it only calls `$BANDIT guard`.
+# $BANDIT may be several words (BANDIT="bun /path/src/cli.ts"), so it is expanded unquoted.
+BANDIT=${BANDIT:-bandit}
+
+if [ "$BANDIT_GUARD_ALLOW" = 1 ]; then
+  echo "warning: BANDIT_GUARD_ALLOW=1, committing without the bandit guard (a human kernel change)" >&2
+  exit 0
+fi
+
+[ -n "$(git diff --cached --name-only)" ] || exit 0
+
+out=$(git diff --cached --name-only -z | xargs -0 $BANDIT guard)
+status=$?
+[ "$status" -eq 0 ] && exit 0
+
+{
+  echo "bandit guard: commit blocked (guard exit status $status)"
+  printf '%s\n' "$out"
+  echo "A human can override with BANDIT_GUARD_ALLOW=1 git commit ..."
+} >&2
+exit 1

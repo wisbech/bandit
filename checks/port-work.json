@@ -1,0 +1,14 @@
+{
+  "card": "port-work",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/port-work.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/port-work.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/port-work.check.ts": "743929a332a853be30509dc462e7839ff70d9ddb830a63e167546c887869c69b"
+  }
+}

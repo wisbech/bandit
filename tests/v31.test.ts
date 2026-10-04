@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { parseCriticVerdict, runLoop, repairBoardFromEvents, cardsIn } from "../src/loop";
+import { parseCriticVerdict, runLoop, cardsIn } from "../src/loop";
 import { parseCard } from "../src/runner";
 import { seedDefaultFolders, readRawEvents } from "./v30-helpers";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
@@ -126,18 +126,5 @@ describe("V3-1: plan phase", () => {
     const events = readRawEvents(root);
     expect(events).toContain("plan.started");
     expect(events).toContain("plan.finished");
-  });
-});
-
-describe("V3-1: event-sourced replay repair", () => {
-  test("repairBoardFromEvents moves cards back to their latest-projected column", () => {
-    seedCard("replay-card");
-    // simulate: card was completed (event says done) but folder is still in backlog
-    const { appendTestEvent } = require("./v30-helpers");
-    appendTestEvent(root, "card.completed", { card: "replay-card" });
-    const result = repairBoardFromEvents();
-    expect(result.moved).toBe(1);
-    expect(existsSync(join(root, ".bandit", "board", "done", "replay-card"))).toBe(true);
-    expect(existsSync(join(root, ".bandit", "board", "backlog", "replay-card"))).toBe(false);
   });
 });
