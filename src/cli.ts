@@ -484,8 +484,26 @@ const COMMANDS: Command[] = [
     fn: async () => {
       const { readEvents } = await import("./loop");
       const events = readEvents();
-      for (const e of events.slice(-30)) console.log(`  ${e.ts} ${e.type} ${JSON.stringify(Object.fromEntries(Object.entries(e).filter(([k]) => !["type", "ts"].includes(k)))).slice(0, 120)}`);
+      for (const e of events.slice(-30)) console.log(`  ${e.ts} ${e.type} ${JSON.stringify(Object.fromEntries(Object.entries(e).filter(([k]) => !["type", "ts", "writer", "seq", "prev"].includes(k)))).slice(0, 120)}`);
       if (events.length === 0) console.log("  (no events)");
+    },
+  },
+  {
+    name: "log",
+    summary: "bandit log verify [--json] — check every segment's hash chain; exit 0 intact, 1 broken (unchained legacy files are pre-genesis)",
+    fn: async (args) => {
+      if (args[0] !== "verify") { console.error("usage: bandit log verify [--json]"); process.exit(2); }
+      const { verifyLog } = await import("./kernel/log");
+      const r = verifyLog(process.cwd());
+      const ok = r.segments.every((s) => s.ok);
+      if (args.includes("--json")) console.log(JSON.stringify(r, null, 2));
+      else {
+        for (const s of r.segments) console.log(`  ${s.ok ? "✓" : "✗"} ${s.file}  ${s.events} events${s.ok ? "" : `  broken at seq ${s.brokenAt}`}`);
+        for (const f of r.preGenesis) console.log(`  · ${f}  pre-genesis (unchained)`);
+        if (r.segments.length === 0 && r.preGenesis.length === 0) console.log("  (no events)");
+        console.log(`  ${ok ? "INTACT" : "BROKEN"}: ${r.segments.length} segment(s), ${r.preGenesis.length} pre-genesis file(s)`);
+      }
+      process.exit(ok ? 0 : 1);
     },
   },
   {

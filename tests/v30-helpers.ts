@@ -1,5 +1,6 @@
-import { mkdirSync, writeFileSync, existsSync, chmodSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, chmodSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { eventFiles } from "../src/kernel/log";
 
 // Shared test helpers: seed the v3 scaffold in a temp project root.
 
@@ -48,4 +49,10 @@ export function appendTestEvent(root: string, type: string, payload: Record<stri
   const eventsDir = join(root, ".bandit", "events");
   if (!existsSync(eventsDir)) mkdirSync(eventsDir, { recursive: true });
   writeFileSync(join(eventsDir, `${date}.jsonl`), JSON.stringify({ type, ts: new Date().toISOString(), ...payload }) + "\n", { flag: "a" });
+}
+
+// The raw text of every event file on the board (segments + legacy), for
+// tests that grep the log the way a human would.
+export function readRawEvents(root: string): string {
+  return eventFiles(root).map((f) => readFileSync(f, "utf-8")).join("");
 }

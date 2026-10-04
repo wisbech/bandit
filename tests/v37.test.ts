@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { runLoop, parseCriticVerdict } from "../src/loop";
 import { selfVerifyGateAsync, parseGate, containerStage, type GateResult } from "../src/runner";
-import { seedDefaultFolders } from "./v30-helpers";
+import { seedDefaultFolders, readRawEvents } from "./v30-helpers";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -63,7 +63,7 @@ describe("V3-7: thread-visible seat", () => {
       'if echo "$1" | grep -q "Grade the work"; then printf %b "CRITERIA:\\n- 1: pass — works\\n- 2: pass — verified\\nVERDICT: pass\\nCONFIDENCE: 0.9\\nREASONING: both criteria\\n"; else echo "work done\\nVERIFICATION_COMMAND: true\\nVERIFICATION_EXIT_CODE: 0\\nVERIFICATION_OUTPUT: ok"; fi',
     ].join("\n"));
     await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 1 });
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).toContain('"criteriaLines":2');
   });
 });
@@ -80,7 +80,7 @@ describe("V3-7: specialist capability capture", () => {
       "esac",
     ].join("\n"));
     await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 1 });
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).toContain("specialist.spawned");
     expect(events).toContain("evidence-pipeline");
     expect(events).not.toContain("specialist-unknown-");
