@@ -316,6 +316,19 @@ const COMMANDS: Command[] = [
         if (r.results.length === 0) console.log("  (no cards)");
         console.log(`  total: ${r.cards} card(s), ${r.accepted} accepted, ${r.rounds} round(s), ${r.tokens} tokens, cost per accepted card ${r.costPerAccepted ?? "n/a"}`);
       }
+    name: "bench",
+    summary: "bandit bench <board-dir> [--json] — run a frozen board once in a temp project; last stdout line is the JSON report",
+    fn: async (args) => {
+      const dirArg = args.find((a) => !a.startsWith("--"));
+      const { statSync } = await import("node:fs");
+      if (!dirArg || !existsSync(dirArg) || !statSync(dirArg).isDirectory()) {
+        console.error("usage: bandit bench <board-dir> [--json]");
+        process.exit(2);
+      }
+      const { resolve } = await import("node:path");
+      const { runBench } = await import("./bench");
+      const report = await runBench(process.cwd(), resolve(dirArg));
+      console.log(JSON.stringify(report));
       process.exit(0);
     },
   },
