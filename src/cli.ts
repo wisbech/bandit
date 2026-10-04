@@ -290,6 +290,84 @@ const COMMANDS: Command[] = [
     },
   },
   {
+    name: "next",
+    summary: "bandit next [--json] [--id <card>] [--lease-min N] — claim the next backlog card for an external worker; exit 0 card, 3 none, 2 usage",
+    fn: async (args) => {
+      const usage = "usage: bandit next [--json] [--id <card>] [--lease-min N]";
+      const die = (m: string): never => { console.error(`${m}\n${usage}`); process.exit(2); };
+      const opts: { id?: string; leaseMin?: number } = {};
+      let json = false;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === "--json") json = true;
+        else if (a === "--id" || a === "--lease-min") {
+          const v = args[++i];
+          if (v === undefined || v.startsWith("--")) die(`${a} needs a value`);
+          if (a === "--id") opts.id = v;
+          else {
+            const n = v.trim() === "" ? NaN : Number(v);
+            if (!Number.isFinite(n) || n < 0) die("--lease-min must be a number >= 0");
+            opts.leaseMin = n;
+          }
+        } else die(`unknown flag: ${a}`);
+      }
+      if (!existsSync(join(process.cwd(), ".bandit", "board"))) die("no .bandit/board here");
+      const { portNext, PortError } = await import("./port-work");
+      try {
+        const c = portNext(process.cwd(), opts);
+        if (!c) { console.log(json ? JSON.stringify({ id: null }) : "no card to claim"); process.exit(3); }
+        console.log(json ? JSON.stringify(c) : `${c.id}  ${c.title}\n  work in ${c.workDir} (branch ${c.branch}), lease until ${c.leaseUntil}`);
+        process.exit(0);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(e instanceof PortError ? e.code : 2);
+      }
+    },
+  },
+  {
+    name: "submit",
+    summary: "bandit submit <id> [--json] [--message <m>] — judge the worktree a port worker leaves; exit 0 pass, 1 fail, 2 usage",
+    fn: async (args) => {
+      const usage = "usage: bandit submit <id> [--json] [--message <m>]";
+      const id = args[0];
+      if (!id || id.startsWith("--")) { console.error(usage); process.exit(2); }
+      let json = false;
+      let message: string | undefined;
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === "--json") json = true;
+        else if (args[i] === "--message" && args[i + 1] !== undefined) message = args[++i];
+        else { console.error(usage); process.exit(2); }
+      }
+      const { portSubmit } = await import("./port-work");
+      try {
+        const r = await portSubmit(process.cwd(), id, { message });
+        console.log(json ? JSON.stringify(r) : `${r.passed ? "PASSED" : "FAILED"} ${id} at ${r.sha.slice(0, 12)} on ${r.branch}`);
+        process.exit(r.passed ? 0 : 1);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      }
+    },
+  },
+  {
+    name: "release",
+    summary: "bandit release <id> [--json] — give a port-held card back to backlog; exit 0, 2 on errors",
+    fn: async (args) => {
+      const usage = "usage: bandit release <id> [--json]";
+      const id = args[0];
+      if (!id || id.startsWith("--") || args.slice(1).some((a) => a !== "--json")) { console.error(usage); process.exit(2); }
+      const { portRelease } = await import("./port-work");
+      try {
+        portRelease(process.cwd(), id);
+        console.log(args.includes("--json") ? JSON.stringify({ id, released: true }) : `released ${id}`);
+        process.exit(0);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      }
+    },
+  },
+  {
     name: "score",
     summary: "bandit score — run bandit.json's score argv in this tree, log score.read, print the number; exit 0, or 2 when no score is configured or its output is not a number",
     fn: async () => {

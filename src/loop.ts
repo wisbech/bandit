@@ -7,6 +7,7 @@ import {
 } from "./kernel/card";
 import { askRoundGate, nullPort, type DecisionPort } from "./decisions";
 import { routeCard } from "./router";
+import { heldByPort } from "./port-work";
 import { isolationMode, openWorktree, keepWorktree, discardWorktree } from "./isolation";
 import { appendEvent, readEvents as readKernelEvents, type LogEvent } from "./kernel/log";
 import { acceptRef as judge } from "./kernel/judge";
@@ -923,6 +924,7 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
   for (const c of kernelCardsIn(root, "in-progress")) {
     const claim = latestClaim(root, c.id);
     if (claim && sameClaimant(claim, self())) mine.push(c.id);
+    else if (heldByPort(root, c.id)) { /* the port holds it */ }
     else if (!claim || !claimantAlive(claim)) reclaimCard(root, c.id, claim);
   }
   let progressOrder = false;
