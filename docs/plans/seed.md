@@ -194,3 +194,36 @@ John's delegate.
 In progress when this was written: after thirty minutes it was on round 3 of its first card (`bench`, the hardest),
 with about 149,000 tokens used on that card and one five-minute stall killed by the watchdog. Results are appended
 below when the run ends.
+
+## Wave 3: compression progress (4 Oct 2026, evening)
+
+After Schmidhuber's compression-progress paper: the scaffold is the compressor, progress is the fall in cost per
+accepted card, and the bandit should pull where cost is falling. Three more cards, written with checks proven
+independent one at a time, built by Opus workers, all accepted and merged:
+
+- `measures`: `bandit measures` records cost per accepted card and source lines per passing ratified check, and reports the change since the last reading.
+- `progress-order`: opt-in backlog ordering by each lever's recent improvement; a lever flat three times is parked.
+- `shrink-check`: `bandit shrink-check` passes only when a branch removes more source lines than it adds. A deletion card uses it as its check.
+
+Totals on `seed/kept-opus`: 14 of 14 cards accepted, all fourteen checks pass together, suite 177 pass, 1 skip, 0 fail.
+First readings on this branch: 6,901 source lines; net +578 lines against `main`. The seed grew the code; no deletion card has been run yet.
+
+Known gaps in `progress-order`, stated by the check's author: parking is permanent (no revive path), a pull is a whole card, and the history has no time window.
+
+## Two more environment findings
+
+- **Docker.** The suite hung on every verdict for a while. Cause: a test probed Docker with no time limit and the Docker daemon on this machine had stopped answering. The probe now has a 3 s limit.
+- **Idle sleep.** Tests and gates were "taking" fifteen minutes and failing their time limits because the computer idle-slept mid-run. Three verdicts failed for that reason and passed when re-run awake. A judge needs a machine that stays awake, and a timeout verdict should be distinguishable from a real failure.
+
+## Cheap-model run, interim (same ten cards, 30 Sep setup)
+
+| Card | Rounds | Tokens | Outcome |
+|---|---|---|---|
+| bench | 3 | 303,603 | requeued by the master (amend) |
+| cost-report | 3 | 162,634 | requeued by the master (amend) |
+| drop-repair-board | 3 | 129,044 | review, no convergence |
+| failure-draft | 2 so far | 77,293 | in progress |
+
+Zero accepted from three finished cards and 672,574 tokens after about three hours of wall time, part of which the
+machine was asleep. Against Opus: 14 accepted at about 75,000 tokens each. The numbers above came from the new
+`bandit cost` verb run on that board, its first real use.
