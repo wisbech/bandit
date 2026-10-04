@@ -1,8 +1,15 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { parseCard, findCardDir, runSerfOnCard, parseGate, type TransportConfig, type CardFolder } from "./runner";
+import {
+  COLUMNS, cardsIn as kernelCardsIn, moveCard as kernelMoveCard, claimCard, reclaimCard, recoverPendingClaims, readCard,
+  latestClaim, claimantAlive, sameClaimant, self,
+} from "./kernel/card";
 import { askRoundGate, type DecisionPort } from "./decisions";
 import { isolationMode, openWorktree, keepWorktree, discardWorktree } from "./isolation";
+import { appendEvent, readEvents as readKernelEvents, type LogEvent } from "./kernel/log";
+import { acceptRef as judge } from "./kernel/judge";
+import { readScore } from "./kernel/score";
 
 // The decision port (dependency inversion): the loop consumes this interface
 // only. Adapters (systemone/laya, jev, future evaluators) live elsewhere and
@@ -18,13 +25,10 @@ export interface LoopConfig {
   container?: string;
   maxRetries?: number;
   once?: boolean;
-  readOnly?: boolean;         // visitor: watch + heartbeat, never process cards
   reducer?: { command: string; args: string[] }; // Evidence-Preserving Reducer (cheap model)
   workDir?: string;           // per card, isolation mode: the card's worktree (default: root)
   branch?: string;            // per card, isolation mode: bandit/<card-id>, carried by `converged`
 }
-
-const COLUMNS = ["backlog", "in-progress", "review", "done"] as const;
 
 function dir(...parts: string[]): string {
   return join(process.cwd(), ".bandit", ...parts);
@@ -80,47 +84,17 @@ function gradeDir(): string {
 // ── EVENTS (append-only truth) ──
 
 export function emit(type: string, payload: Record<string, unknown>): void {
-  const date = new Date().toISOString().slice(0, 10);
-  const file = join(dir("events"), `${date}.jsonl`);
-  writeFileSync(file, JSON.stringify({ type, ts: new Date().toISOString(), ...payload }) + "\n", { flag: "a" });
+  appendEvent(process.cwd(), type, payload);
 }
 
-export function readEvents(sinceTs?: string): { type: string; ts: string; [k: string]: unknown }[] {
-  const eventsDir = dir("events");
-  if (!existsSync(eventsDir)) return [];
-  const out: { type: string; ts: string; [k: string]: unknown }[] = [];
-  for (const f of readdirSync(eventsDir).filter((f) => f.endsWith(".jsonl"))) {
-    for (const line of readFileSync(join(eventsDir, f), "utf-8").split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const e = JSON.parse(line);
-        if (!sinceTs || e.ts > sinceTs) out.push(e);
-      } catch {}
-    }
-  }
-  return out.sort((a, b) => a.ts.localeCompare(b.ts));
+export function readEvents(sinceTs?: string): LogEvent[] {
+  return readKernelEvents(process.cwd(), sinceTs);
 }
 
 // ── BOARD (projection over card folders) ──
 
 export function cardsIn(column: (typeof COLUMNS)[number]): CardFolder[] {
-  const colDir = dir("board", column);
-  if (!existsSync(colDir)) return [];
-  return readdirSync(colDir)
-    .sort() // frontier order = id order (APFS readdir is hash order); numbered titles run in sequence
-    .map((name) => join(colDir, name))
-    .filter((d) => existsSync(join(d, "card.md")))
-    .map((d) => parseCard(d));
-}
-
-export function moveCard(card: CardFolder, to: (typeof COLUMNS)[number]): void {
-  // The card may have been moved since it was read — resolve its current dir.
-  const current = findCardDir(configRoot(), card.id) ?? card.dir;
-  const target = dir("board", to, card.id);
-  renameSync(current, target);
-  const cardMd = join(target, "card.md");
-  const raw = readFileSync(cardMd, "utf-8").replace(/^column: .+$/m, `column: ${to}`);
-  writeFileSync(cardMd, raw);
+  return kernelCardsIn(process.cwd(), column);
 }
 
 // Hand intervention: put a card back in backlog from any column, on the record.
@@ -129,15 +103,17 @@ export function reopenCard(root: string, id: string, reason: string): void {
   if (!reason.trim()) throw new Error("--reason is required");
   const cardDir = findCardDir(root, id);
   if (!cardDir) throw new Error(`no card ${id} in any column`);
-  moveCard(parseCard(cardDir), "backlog");
-  emit("card.moved", { card: id, to: "backlog", by: "hand", reason });
+  if (!kernelMoveCard(root, id, parseCard(cardDir).column, "backlog")) throw new Error(`card ${id} moved while reopening — try again`);
+  appendEvent(root, "card.moved", { card: id, to: "backlog", by: "hand", reason });
 }
 
-// The loop's config root, set once per runLoop call (module-level because
-// moveCard is a projection helper).
-let _root: string | null = null;
-function configRoot(): string {
-  return _root ?? process.cwd();
+// Fenced exit from in-progress: only the process holding the latest claim
+// moves the card, and only from in-progress. Anyone else abandons it in place.
+export function exitInProgress(root: string, id: string, to: (typeof COLUMNS)[number]): boolean {
+  const claim = latestClaim(root, id);
+  const ok = claim !== null && sameClaimant(claim, self()) && kernelMoveCard(root, id, "in-progress", to);
+  if (!ok) appendEvent(root, "card.claim_lost", { card: id, to, claimant: claim, self: self() });
+  return ok;
 }
 
 // ── PIPELINES (difficulty-proportional) ──
@@ -699,7 +675,6 @@ async function convergeCard(
         recordSpend(parseCard(currentCardDir), run.tokensUsed);
         if (leverId) conf.weaken(config.root, leverId, `round ${round}: transport red — empty actor output`);
         if (round >= maxRetries) {
-          moveCard(card, "review");
           emit("task.failed", { card: card.id, reason: "transport-empty-output", attempts: round });
           return "no-convergence";
         }
@@ -902,8 +877,7 @@ async function convergeCard(
       if (amendRequeueCount(requeuedCard) >= AMEND_REQUEUE_LIMIT) {
         emit("card.amend_limit", { card: card.id, requeues: amendRequeueCount(requeuedCard), limit: AMEND_REQUEUE_LIMIT });
       } else {
-        recordAmendRequeue(requeuedCard);
-        moveCard(requeuedCard, "backlog");
+        recordAmendRequeue(requeuedCard); // runLoop makes the fenced move to backlog
         emit("card.requeued", { card: card.id, to: "backlog", reason: "master route: amend", requeues: amendRequeueCount(requeuedCard) });
         return "requeued";
       }
@@ -916,7 +890,6 @@ async function convergeCard(
 }
 
 export async function runLoop(config: LoopConfig): Promise<{ processed: number; completed: number; failed: number }> {
-  _root = config.root;
   ensureScaffold();
   let processed = 0, completed = 0, failed = 0;
   const maxRetries = config.maxRetries ?? 3;
@@ -927,19 +900,32 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
   decisionPort = resolveDecisionPort(loadDecisionConfig(config.root));
   const isolated = isolationMode(config.root) === "worktree";
 
-  // Resume stranded in-progress cards (from interrupted runs) + fresh backlog.
-  const frontier = [...cardsIn("in-progress"), ...cardsIn("backlog")];
-  for (const card of frontier) {
-    const liveCard = parseCard(findCardDir(config.root, card.id) ?? card.dir);
+  // Frontier: in-progress cards whose latest claim is ours, then backlog cards
+  // we win the claim on. An in-progress card held by a dead process (or by no
+  // claim at all: boards from before claims) goes back to backlog first.
+  const root = config.root;
+  recoverPendingClaims(root);
+  const mine: string[] = [];
+  for (const c of kernelCardsIn(root, "in-progress")) {
+    const claim = latestClaim(root, c.id);
+    if (claim && sameClaimant(claim, self())) mine.push(c.id);
+    else if (!claim || !claimantAlive(claim)) reclaimCard(root, c.id, claim);
+  }
+  const frontier = [...mine, ...kernelCardsIn(root, "backlog").map((c) => c.id)];
+  for (const id of frontier) {
+    const liveDir = findCardDir(root, id);
+    const liveCard = liveDir ? readCard(liveDir) : null;
+    if (!liveDir || !liveCard) continue; // moved under us: another loop's now
     if (budgetExhausted(liveCard)) {
-      emit("card.budget_exhausted", { card: card.id });
-      console.log(`  ⊘ ${card.id}: budget exhausted — skipping`);
+      emit("card.budget_exhausted", { card: id });
+      console.log(`  ⊘ ${id}: budget exhausted — skipping`);
       continue;
     }
-    if (liveCard.column !== "in-progress") {
-      moveCard(liveCard, "in-progress");
-      emit("card.moved", { card: card.id, to: "in-progress" });
+    if (!mine.includes(id)) {
+      if (!claimCard(root, id)) continue; // someone else won it
+      emit("card.moved", { card: id, to: "in-progress" });
     }
+    const card = parseCard(findCardDir(root, id) ?? liveDir);
     processed += 1;
 
     const kind = pipelineFor(card.body.match(/^- .+$/gm)?.length ?? 0, card.body.length);
@@ -954,28 +940,51 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     const wt = isolated ? openWorktree(config.root, card.id) : null;
     if (wt?.resetFrom) emit("isolation.branch_reset", { card: card.id, branch: wt.branch, previous: wt.resetFrom });
     let result: Awaited<ReturnType<typeof convergeCard>> | null = null;
+    // Rule 1: nothing counts until the judge says so. In isolation mode the
+    // kept branch is judged before the card may reach done; a red verdict
+    // sends it to review and the branch stays as evidence.
+    let verdict: string | undefined;
+    let judgeFailure: Record<string, unknown> | null = null;
     try {
       result = await convergeCard(wt ? { ...config, workDir: wt.dir, branch: wt.branch } : config, card, maxRetries, kind);
     } finally {
       if (wt && result === "converged") {
         const kept = keepWorktree(config.root, card.id, `bandit: ${card.id} ${card.frontmatter.title ?? ""}`.trim());
-        if (kept.error) emit("isolation.commit_failed", { card: card.id, branch: kept.branch, dir: wt.dir, reason: kept.error });
+        if (kept.error) {
+          emit("isolation.commit_failed", { card: card.id, branch: kept.branch, dir: wt.dir, reason: kept.error });
+          judgeFailure = { branch: kept.branch, error: "commit failed: nothing to judge" };
+        } else {
+          try {
+            const v = await judge({ root, cardId: card.id, ref: kept.branch, base: wt.base });
+            if (v.passed) {
+              verdict = v.sha;
+              try { readScore(root, root); } catch {} // recorded, never a gate
+            }
+            else judgeFailure = { branch: kept.branch, sha: v.sha, gates: v.gates.map((g) => ({ name: g.name, exitCode: g.exitCode, argv: g.argv })) };
+          } catch (e) {
+            judgeFailure = { branch: kept.branch, error: String(e instanceof Error ? e.message : e).slice(0, 200) };
+          }
+        }
       } else if (wt) {
         emit("isolation.discarded", { card: card.id, branch: discardWorktree(config.root, card.id) });
       }
     }
-    if (result === "converged") {
-      moveCard(card, "done");
-      emit("card.completed", { card: card.id });
-      completed += 1;
+    if (result === "converged" && !wt) emit("judge.skipped", { card: card.id, reason: "shared mode" });
+    if (result === "converged" && judgeFailure) {
+      if (exitInProgress(root, card.id, "review")) {
+        emit("task.failed", { card: card.id, reason: "judge", ...judgeFailure });
+        failed += 1;
+      }
+    } else if (result === "converged") {
+      if (exitInProgress(root, card.id, "done")) {
+        emit("card.completed", { card: card.id, ...(verdict ? { verdict } : {}) });
+        completed += 1;
+      }
     } else if (result === "requeued") {
-      // The routing consult moved it to backlog already — it is the frontier
-      // of the next pass. Not a failure; not a completion.
-      const liveDir = findCardDir(config.root, card.id) ?? card.dir;
-      const liveCard = parseCard(liveDir);
-      if (liveCard.column !== "backlog") moveCard(liveCard, "backlog");
-    } else {
-      moveCard(card, "review");
+      // The routing consult chose amend: back to backlog, the frontier of the
+      // next pass. Not a failure; not a completion.
+      exitInProgress(root, card.id, "backlog");
+    } else if (exitInProgress(root, card.id, "review")) {
       emit("task.failed", { card: card.id, reason: "no-convergence", attempts: maxRetries });
       failed += 1;
     }
@@ -1010,14 +1019,13 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     }, 60_000);
     let waking = false;
     const wake = async () => {
-      if (config.readOnly) return; // visitors observe; the lock holder processes
-      if (cardsIn("backlog").length === 0 && cardsIn("in-progress").length === 0) return;
+      if (kernelCardsIn(config.root, "backlog").length === 0 && kernelCardsIn(config.root, "in-progress").length === 0) return;
       waking = true;
       try {
         let pass;
         do {
           pass = await runLoop({ ...config, once: true });
-        } while (pass.processed > 0 && cardsIn("backlog").length > 0); // a card arrived during the pass (budget-exhausted skips don't spin)
+        } while (pass.processed > 0 && kernelCardsIn(config.root, "backlog").length > 0); // a card arrived during the pass (budget-exhausted skips don't spin)
       } catch (e) {
         // a swallowed wake error looks exactly like "not working" — surface it
         console.log(`  ⚠ wake failed: ${String(e).slice(0, 120)}`);

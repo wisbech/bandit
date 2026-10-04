@@ -23,7 +23,8 @@ export function worktreeOf(root: string, id: string): { dir: string; branch: str
 
 // Fresh worktree from HEAD. Leftovers from an interrupted run are dropped first;
 // an existing bandit/<id> branch is reset (its old sha is returned for the record).
-export function openWorktree(root: string, id: string): { dir: string; branch: string; resetFrom: string | null } {
+// `base` is the sha it was cut from: the judge reads checks and config there.
+export function openWorktree(root: string, id: string): { dir: string; branch: string; resetFrom: string | null; base: string } {
   const { dir, branch } = worktreeOf(root, id);
   if (git(root, "check-ignore", "-q", ".bandit/worktrees/" + id).code !== 0) {
     const p = join(root, ".bandit", ".gitignore");
@@ -36,9 +37,12 @@ export function openWorktree(root: string, id: string): { dir: string; branch: s
   }
   git(root, "worktree", "prune");
   const prior = git(root, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
-  const add = git(root, "worktree", "add", "-q", "-B", branch, dir, "HEAD");
+  const head = git(root, "rev-parse", "--verify", "HEAD");
+  if (head.code !== 0) throw new Error(`isolation: no HEAD commit in ${root}`);
+  const base = head.stdout.trim();
+  const add = git(root, "worktree", "add", "-q", "-B", branch, dir, base);
   if (add.code !== 0) throw new Error(`isolation: git worktree add failed in ${root}: ${add.stderr.trim().slice(0, 200)}`);
-  return { dir, branch, resetFrom: prior.code === 0 ? prior.stdout.trim() : null };
+  return { dir, branch, resetFrom: prior.code === 0 ? prior.stdout.trim() : null, base };
 }
 
 // Green: commit what the worker left uncommitted (never .bandit/), drop the

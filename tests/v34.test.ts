@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { runLoop } from "../src/loop";
-import { seedDefaultFolders } from "./v30-helpers";
+import { seedDefaultFolders, readRawEvents } from "./v30-helpers";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -60,7 +60,7 @@ describe("V3-4: consult model", () => {
     const transport = writeStub("stub-p.sh", CONSULT_STUB);
     const result = await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 2 });
     void result;
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).toContain("consult.opened");
     expect(events).toContain('"thread":"plan"');
     expect(events).toContain("consult.decided");
@@ -85,7 +85,7 @@ describe("V3-4: consult model", () => {
     ].join("\n"));
     const result = await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 2 });
     expect(result.completed).toBe(0);
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).toContain("plan.rejected");
     expect(events).toContain('"via":"consult"');
     // zero execution rounds — rejected at plan time
@@ -107,7 +107,7 @@ describe("V3-4: consult model", () => {
       "esac",
     ].join("\n"));
     await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 3 });
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).toContain('"thread":"stagnation"');
     expect(events).toContain("consult.turn");
     // exactly one stagnation consult despite 3 rounds
@@ -127,7 +127,7 @@ describe("V3-4: consult model", () => {
       "esac",
     ].join("\n"));
     await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 2 });
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).toContain("consult.routed");
     expect(events).toContain('"decision":"specialist"');
     expect(events).toContain("specialist.spawned");
@@ -138,7 +138,7 @@ describe("V3-4: consult model", () => {
     seedCard("consult-pass", undefined, "verify: true\n");
     const p = writeStub("stub-g.sh", "#!/bin/sh\ncat << 'OUT'\nDid the work.\nVERIFICATION_COMMAND: true\nVERIFICATION_EXIT_CODE: 0\nVERIFICATION_OUTPUT: 3 pass\nOUT\n");
     await runLoop({ once: true, root, transport: { kind: "headless", command: p, args: [] }, maxRetries: 1 });
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).not.toContain("consult.opened");
     expect(events).toContain("card.completed");
     expect(existsSync(join(root, ".bandit", "grading", "consult-pass.md"))).toBe(true);
@@ -158,7 +158,7 @@ describe("V3-4: consult model", () => {
     const result = await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 1 });
     // grader passed, consult passed, gate red → task.failed. No conversation moves the gate.
     expect(result.completed).toBe(0);
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).toContain("task.failed");
     expect(events).toContain('"type":"verification.red"');
     expect(events).not.toContain("converged");
@@ -177,7 +177,7 @@ describe("V3-4: consult model", () => {
     const result = await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 1 });
     // Not failed, not completed: the routing consult's amend requeues the card.
     expect(result.completed).toBe(0);
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).toContain("consult.routed");
     expect(events).toContain('"decision":"amend"');
     expect(events).toContain("card.requeued");
@@ -192,7 +192,7 @@ describe("V3-4: consult model", () => {
     expect(readFileSync(join(cardDir, "card.md"), "utf-8")).toContain("amendRequeues: 2");
     // Bound: at the limit, the third amend route leaves it in review for a human.
     const third = await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 1 });
-    expect(events + readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8")).toContain("card.amend_limit");
+    expect(events + readRawEvents(root)).toContain("card.amend_limit");
     expect(existsSync(join(root, ".bandit", "board", "review", "consult-amend"))).toBe(true);
     void third;
   });

@@ -5,11 +5,11 @@
 // Thresholds come from labelled examples (--calibrate), never from intuition.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadDecisionConfig, resolveDecisionPort, type DecisionPort, type GaugeAnswer, type GaugeQuestion } from "./decisions";
 import { STATE_CEILING } from "./evaluator-systemone";
-import { emit } from "./loop";
+import { appendEvent } from "./kernel/log";
 
 export interface PassRule { min?: number; max?: number; is?: string }
 export interface Gauge { name: string; about?: string; questions: Record<string, GaugeQuestion & { pass?: PassRule }> }
@@ -156,7 +156,7 @@ function readingText(r: Reading): string {
 // The verb. Returns the exit code: 0 pass (or no rules), 1 a rule failed,
 // 2 usage error or no reading (unconfigured/unreachable — never a pass).
 export async function gaugeMain(args: string[]): Promise<number> {
-  const root = process.cwd(); // emit() writes under cwd too
+  const root = process.cwd();
   const usage = "usage: bandit gauge <name> (--file <path> | --text <string> | stdin) [--json] [--timeout-ms N]\n       bandit gauge <name> --calibrate <examples.jsonl> [--json] [--timeout-ms N]";
   const flag = (f: string) => { const i = args.indexOf(f); return i >= 0 ? (args[i + 1] ?? "") : undefined; };
   const json = args.includes("--json");
@@ -213,8 +213,7 @@ export async function gaugeMain(args: string[]): Promise<number> {
     if (!readings) throw new GaugeError(unreachable);
     const verdict = Object.values(readings).some((r) => r.pass === false) ? "fail" : "pass";
     const sha256 = createHash("sha256").update(full).digest("hex");
-    mkdirSync(join(root, ".bandit", "events"), { recursive: true });
-    emit("gauge.read", { gauge: g.name, source, sha256, truncated, readings, verdict });
+    appendEvent(root, "gauge.read", { gauge: g.name, source, sha256, truncated, readings, verdict });
     if (json) console.log(JSON.stringify({ gauge: g.name, source, sha256, truncated, readings, verdict }, null, 2));
     else {
       for (const [id, r] of Object.entries(readings))

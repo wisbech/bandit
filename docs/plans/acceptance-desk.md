@@ -71,7 +71,7 @@ Each waits for a measured trigger.
 ## 7. Known gaps
 
 - The decision adapter times out at 2 s and a cold local evaluator call took 1.6 s: early routing calls can hit the escalate floor. Raise `decisions.timeoutMs` in the project config rather than the default.
-- `emit` writes under the current directory, so `accept` must be run from the board directory.
+- ~~`emit` writes under the current directory, so `accept` must be run from the board directory.~~ Fixed on `feat/seed-kernel-a`: `acceptRef` logs under `opts.root` through `src/kernel/log.ts`. The CLI still takes the board from the current directory.
 - If `git worktree add` fails, `acceptance.started` has no matching verdict event (CLI exits 2).
 - If the commit on convergence fails, the worktree is kept and the card still moves to done.
 - `--post` is tested with a stubbed `gh` only.
@@ -148,4 +148,4 @@ Starter gauge, the 16 committed examples (4 evidence-backed lessons, 4 vague opi
 - Cold start: 17 s for the first call after idle. Gate timeouts must allow for it.
 - Uncalibrated out of the box: the starter gauge has no thresholds, and any thresholds hold only for the evaluator model they were measured on.
 - Calibration sends one request per example, in sequence. That is fine at 16 examples (6.5 s warm, measured) and slow at thousands.
-- `emit` writes under the current directory, so run `gauge` from the board directory, as with `accept`.
+- `gauge` takes the board from the current directory (it now logs through `src/kernel/log.ts` with that root, so reads and writes agree).

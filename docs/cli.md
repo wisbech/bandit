@@ -34,7 +34,7 @@ Run the factory loop over the board. Holds open watching for new cards when drai
 | `--once` | one pass over the board, then exit (no watch mode) |
 | `--yes` | skip interactive picker even in a TTY |
 
-Only *missing* panes open on start — rejoining a live factory doesn't duplicate workers. A second `bandit start` on a running factory is a visitor: it joins, doesn't clash.
+Only *missing* panes open on start — rejoining a live factory doesn't duplicate workers. A second `bandit start` on a running factory is a second loop: it works only the cards it claims, so the two never clash.
 
 ### `bandit task "title" [--accept "criterion"] ...`
 Add a card to the backlog. Multiple `--accept` flags become the acceptance criteria that drive the verification gate.
@@ -127,8 +127,8 @@ Fold a v2 `.serf/` into `.bandit/` (cards → folders, sidecars folded, serfs pa
 
 ## Exit behavior
 
-- `start` installs a SIGINT handler that clears `run.lock` — Ctrl+C never leaves a stale lock.
-- A stale lock (dead pid) is auto-cleared on next start; a live lock opens visitor mode.
+- No lock. A loop claims a card by renaming it from `backlog/` to `in-progress/` (one winner) and logs `card.claimed {pid, startedAt}`.
+- A card whose claimant died (pid gone, or reused with a different start time) is reclaimed by the next loop.
 - Non-zero exits print the reason (missing `.bandit/`, v2 factory still running, unknown command) — nothing fails silently.
 
 ## Environment discipline

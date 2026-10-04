@@ -108,3 +108,37 @@ test("shared mode (default): work lands in the project root, no branch, no workt
   expect(existsSync(join(root, ".bandit", ".gitignore"))).toBe(false);
   expect(readEvents().find((e) => e.type === "converged")).not.toHaveProperty("branch");
 });
+
+// Rule 1: nothing counts until the judge says so. The kept branch is judged
+// (card verify + project gates, in a throwaway worktree) before done.
+
+test("judge: self-verify green but the branch fails a project gate -> review, not done; branch kept", async () => {
+  writeFileSync(join(root, ".bandit", "config.json"), JSON.stringify({ isolation: "worktree", gates: [["test", "-f", "gate.txt"]] }));
+  seedCard("gated", "test -f feature.txt");
+  const r = await runLoop({ once: true, root, transport: { kind: "headless", command: stub("feature.txt"), args: [] }, maxRetries: 1 });
+  expect(r.completed).toBe(0);
+  expect(r.failed).toBe(1);
+  expect(existsSync(join(root, ".bandit", "board", "review", "gated", "card.md"))).toBe(true);
+  expect(git("rev-parse", "--verify", "--quiet", "refs/heads/bandit/gated").code).toBe(0); // evidence
+  const failed = readEvents().find((e) => e.type === "task.failed" && e.card === "gated");
+  expect(failed).toMatchObject({ reason: "judge", branch: "bandit/gated", gates: [{ name: "verify", exitCode: 0 }, { name: "gate-1", exitCode: 1 }] });
+  expect(readEvents().some((e) => e.type === "card.completed")).toBe(false);
+  expect(readEvents().find((e) => e.type === "acceptance.failed")).toMatchObject({ card: "gated", ref: "bandit/gated" });
+});
+
+test("judge: self-verify and project gate both green -> done, card.completed carries the verdict sha", async () => {
+  writeFileSync(join(root, ".bandit", "config.json"), JSON.stringify({ isolation: "worktree", gates: [["test", "-f", "feature.txt"]] }));
+  seedCard("judged", "test -f feature.txt");
+  const r = await runLoop({ once: true, root, transport: { kind: "headless", command: stub("feature.txt"), args: [] }, maxRetries: 1 });
+  expect(r.completed).toBe(1);
+  const sha = git("rev-parse", "bandit/judged").stdout.trim();
+  expect(readEvents().find((e) => e.type === "card.completed")).toMatchObject({ card: "judged", verdict: sha });
+  expect(readEvents().find((e) => e.type === "acceptance.passed")).toMatchObject({ card: "judged", sha, base: git("rev-parse", "main").stdout.trim() });
+  expect(existsSync(join(root, ".bandit", "board", "done", "judged", "card.md"))).toBe(true);
+});
+
+test("judge: shared mode has no committed sha to judge and says so once per card", async () => {
+  seedCard("shared2", "test -f feature.txt");
+  await runLoop({ once: true, root, transport: { kind: "headless", command: stub("feature.txt"), args: [] }, maxRetries: 1 });
+  expect(readEvents().filter((e) => e.type === "judge.skipped")).toMatchObject([{ card: "shared2", reason: "shared mode" }]);
+});

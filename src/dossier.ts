@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
-import { readEvents } from "./loop";
+import { basename, dirname, join, relative } from "node:path";
+import { readEvents } from "./kernel/log";
 
 // dossier.ts — `bandit card <id>`: the card dossier (visibility plan §3.1).
 // A pure projection over existing state: the event log, the card folder,
@@ -235,7 +235,7 @@ function probeScratch(path: string): { bytes: number; files: number } | null {
 export function renderCardDossier(root: string, cardId: string): string {
   const lines: string[] = [];
   const cardDir = findCardDir(root, cardId);
-  const events = readEvents().filter((e) => e.card === cardId);
+  const events = readEvents(root).filter((e) => e.card === cardId);
   lines.push(`╔══ CARD DOSSIER ═══════════════════════════════════════`);
   lines.push(`  id: ${cardId}`);
 
@@ -243,7 +243,7 @@ export function renderCardDossier(root: string, cardId: string): string {
   if (cardDir) {
     const raw = readFileSync(join(cardDir, "card.md"), "utf-8");
     const title = raw.match(/^title:\s*(.+)$/m)?.[1] ?? cardId.split("-").slice(0, -1).join(" ");
-    const column = raw.match(/^column:\s*(\S+)$/m)?.[1] ?? "?";
+    const column = basename(dirname(cardDir)); // the folder is the column
     lines.push(`  title: ${title}`);
     lines.push(`  column: ${column}`);
     lines.push("");
@@ -336,7 +336,7 @@ export function renderCardDossier(root: string, cardId: string): string {
 const CARD_COLUMNS = ["backlog", "in-progress", "review", "done"] as const;
 
 export function findCardDir(root: string, cardId: string): string | null {
-  const moved = [...readEvents().filter((e) => e.card === cardId)]
+  const moved = [...readEvents(root).filter((e) => e.card === cardId)]
     .reverse()
     .find((e) => e.type === "card.moved" && e.to !== undefined);
   const order = moved ? [String(moved.to), ...CARD_COLUMNS] : [...CARD_COLUMNS];

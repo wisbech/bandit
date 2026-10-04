@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { runLoop, cardsIn, readEvents } from "./loop";
@@ -278,8 +278,51 @@ const COMMANDS: Command[] = [
       try {
         const r = await acceptRef({ root: process.cwd(), cardId: id, ref, repo: flag("--repo"), post: args.includes("--post") });
         for (const g of r.gates) console.log(`  ${g.exitCode === 0 ? "✓" : "✗"} ${g.name.padEnd(8)} exit ${g.exitCode}  ${(g.durationMs / 1000).toFixed(1)}s  ${g.argv.join(" ")}`);
-        console.log(`  ${r.passed ? "PASSED" : "FAILED"} ${id} at ${r.sha.slice(0, 12)}`);
+        for (const g of r.gates) if (g.exitCode !== 0 && g.output.trim()) console.log(g.output.trim().split("\n").slice(0, 20).map((l) => `      ${l}`).join("\n"));
+        console.log(`  ${r.passed ? "PASSED" : "FAILED"} ${id} at ${r.sha.slice(0, 12)}  (ratified: ${r.ratified ? "yes" : "no"}, base ${r.base ? r.base.slice(0, 12) : "none"})`);
         process.exit(r.passed ? 0 : 1);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      }
+    },
+  },
+  {
+    name: "score",
+    summary: "bandit score — run bandit.json's score argv in this tree, log score.read, print the number; exit 0, or 2 when no score is configured or its output is not a number",
+    fn: async () => {
+      const { readScore, scoreArgv } = await import("./kernel/score");
+      try {
+        if (!scoreArgv(process.cwd())) { console.error('no "score" in bandit.json'); process.exit(2); }
+        const v = readScore(process.cwd(), process.cwd());
+        if (v === null) { console.error("score output is not a JSON number or {\"score\": <number>}"); process.exit(2); }
+        console.log(v);
+        process.exit(0);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      }
+    },
+  },
+  {
+    name: "ratify",
+    summary: 'human-only: pin a card\'s check: bandit ratify <card-id> --paths <p1,p2,...> [--verify "<cmd>"] — writes checks/<card-id>.json; you commit it on the base branch',
+    fn: async (args) => {
+      const usage = 'usage: bandit ratify <card-id> --paths <p1,p2,...> [--verify "<cmd>"]';
+      const flag = (name: string) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
+      const id = args[0];
+      const paths = (flag("--paths") ?? "").split(",").map((p) => p.trim()).filter(Boolean);
+      if (!existsSync(banditDir()) || !id || id.startsWith("--") || paths.length === 0) {
+        console.error(usage);
+        process.exit(2);
+      }
+      const { ratify } = await import("./kernel/judge");
+      try {
+        const { file, ratification } = ratify(process.cwd(), process.cwd(), id, paths, flag("--verify"));
+        console.log(`  ✓ wrote ${file}`);
+        console.log(`    verify: ${ratification.verify.join(" ")}`);
+        for (const p of ratification.checkPaths) console.log(`    ${p}  sha256 ${ratification.sha256[p].slice(0, 16)}`);
+        console.log(`  → commit this file on your base branch: git add checks/${id}.json && git commit -m "ratify ${id}"`);
       } catch (e) {
         console.error(e instanceof Error ? e.message : String(e));
         process.exit(2);
@@ -353,26 +396,8 @@ const COMMANDS: Command[] = [
           // dead v2 pid — stale marker, ignore
         }
       }
-      // Single-runner lock (the suspended-pid fix): a stale lock from a dead
-      // process is auto-cleared; a live one refuses with its pid.
-      const lockPath = join(banditDir(), "run.lock");
-      let visitor = false;
-      if (existsSync(lockPath)) {
-        try {
-          const lockPid = parseInt(readFileSync(lockPath, "utf-8").trim(), 10);
-          process.kill(lockPid, 0); // throws if dead
-          // Already running = the factory is live = open the door. You walk in
-          // as a visitor; no error, no kill needed.
-          visitor = true;
-          console.log("  ✓ bandit is live (pid " + lockPid + ") — opening the door (panes auto-open)");
-        } catch {
-          console.log("  · stale lock cleared (previous run died)");
-        }
-      }
-      if (!visitor) {
-        writeFileSync(lockPath, String(process.pid));
-        process.on("SIGINT", () => { try { unlinkSync(lockPath); } catch {} process.exit(0); });
-      }
+      // No lock: any number of loops may share a board. Each works only the
+      // cards it claims (kernel/card.ts claimCard); a claim is a rename.
       const cfg = JSON.parse(readFileSync(join(banditDir(), "config.json"), "utf-8"));
 
       // ── Launch config: flags > interactive picker > config.json ──
@@ -470,12 +495,10 @@ const COMMANDS: Command[] = [
         container: cfg.container || undefined,
         maxRetries: cfg.maxRetries ?? 3,
         once: args.includes("--once"),
-        readOnly: visitor, // visitors watch; the lock holder processes cards
         // Evidence-Preserving Reducer (SoL-Pi): optional cheap model that
         // compresses large gate logs into verified receipts.
         reducer: cfg.reducer ?? undefined,
       });
-      if (!visitor) { try { unlinkSync(lockPath); } catch {} }
     },
   },
   {
@@ -484,8 +507,26 @@ const COMMANDS: Command[] = [
     fn: async () => {
       const { readEvents } = await import("./loop");
       const events = readEvents();
-      for (const e of events.slice(-30)) console.log(`  ${e.ts} ${e.type} ${JSON.stringify(Object.fromEntries(Object.entries(e).filter(([k]) => !["type", "ts"].includes(k)))).slice(0, 120)}`);
+      for (const e of events.slice(-30)) console.log(`  ${e.ts} ${e.type} ${JSON.stringify(Object.fromEntries(Object.entries(e).filter(([k]) => !["type", "ts", "writer", "seq", "prev"].includes(k)))).slice(0, 120)}`);
       if (events.length === 0) console.log("  (no events)");
+    },
+  },
+  {
+    name: "log",
+    summary: "bandit log verify [--json] — check every segment's hash chain; exit 0 intact, 1 broken (unchained legacy files are pre-genesis)",
+    fn: async (args) => {
+      if (args[0] !== "verify") { console.error("usage: bandit log verify [--json]"); process.exit(2); }
+      const { verifyLog } = await import("./kernel/log");
+      const r = verifyLog(process.cwd());
+      const ok = r.segments.every((s) => s.ok);
+      if (args.includes("--json")) console.log(JSON.stringify(r, null, 2));
+      else {
+        for (const s of r.segments) console.log(`  ${s.ok ? "✓" : "✗"} ${s.file}  ${s.events} events${s.ok ? "" : `  broken at seq ${s.brokenAt}`}`);
+        for (const f of r.preGenesis) console.log(`  · ${f}  pre-genesis (unchained)`);
+        if (r.segments.length === 0 && r.preGenesis.length === 0) console.log("  (no events)");
+        console.log(`  ${ok ? "INTACT" : "BROKEN"}: ${r.segments.length} segment(s), ${r.preGenesis.length} pre-genesis file(s)`);
+      }
+      process.exit(ok ? 0 : 1);
     },
   },
   {
@@ -973,29 +1014,19 @@ const COMMANDS: Command[] = [
       }
       add("Harness binary", binOk, binNote);
 
-      // 5. STALE LOCK (a dead factory holds the board hostage)
-      const lockPath = join(banditDir(), "run.lock");
-      if (!existsSync(lockPath)) add("Board lock", true, "no stale run.lock");
-      else {
-        const pid = parseInt(readFileSync(lockPath, "utf-8").trim(), 10);
-        let alive = false;
-        try { process.kill(parseInt(readFileSync(lockPath, "utf-8"), 10), 0); alive = true; } catch {}
-        add("Lock", true, alive ? `run.lock held by live pid ${readFileSync(lockPath, "utf-8")} — visitors join as watch-only` : `stale run.lock (pid dead) — will auto-clear on next start`, !alive);
-      }
-
-      // 6. DECISIONS port (optional organ — warn-only when absent)
+      // 5. DECISIONS port (optional organ — warn-only when absent)
       const { loadDecisionConfig } = await import("./decisions");
       const dcfg = loadDecisionConfig(process.cwd());
       add("Decisions port", true, dcfg ? `${dcfg.evaluator} configured (graded judging)` : "none configured — grading falls to the classifier seat (advisory)", !dcfg);
 
-      // 7. BUDGETS sanity: any card over its own limit still on the frontier?
+      // 6. BUDGETS sanity: any card over its own limit still on the frontier?
       const { cardsIn, readEvents } = await import("./loop");
       const frontier = [...cardsIn("backlog" as never), ...cardsIn("in-progress" as never)] as { id: string; frontmatter: Record<string, string> }[];
       // limit 0/absent = no budget (matches the loop's budgetExhausted), not "exhausted at zero"
       const stuck = frontier.filter((c) => { const limit = parseInt(c.frontmatter.budgetLimit ?? "0", 10); return limit > 0 && parseInt(c.frontmatter.lifetimeTokensUsed ?? "0", 10) >= limit; });
       add("Budgets", stuck.length === 0, stuck.length === 0 ? "no frontier card over budget" : `budget-exhausted on frontier: ${stuck.map((c) => c.id).join(", ")} (start will skip them)`);
 
-      // 8. EVENT FLOW: is the factory breathing?
+      // 7. EVENT FLOW: is the factory breathing?
       const events = readEvents();
       const today = new Date().toISOString().slice(0, 10);
       const todayEvents = events.filter((e) => String(e.ts).startsWith(today));

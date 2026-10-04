@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { appendEvent, readEvents, type LogEvent } from "./kernel/log";
 
 // refiner.ts — Continual Harness (2605.09998) × prime-agent /refine.
 // Reads the event window, classifies failure signatures, applies small
@@ -100,17 +101,8 @@ export function shouldTrigger(root: string): { trigger: boolean; reason: string 
   return { trigger: false, reason: "no threshold reached" };
 }
 
-function readEventsWindow(root: string): { type: string; ts: string; [k: string]: unknown }[] {
-  const eventsDir = join(root, ".bandit", "events");
-  if (!existsSync(eventsDir)) return [];
-  const out: { type: string; ts: string; [k: string]: unknown }[] = [];
-  for (const f of readdirSync(eventsDir).filter((f) => f.endsWith(".jsonl"))) {
-    for (const line of readFileSync(join(eventsDir, f), "utf-8").split("\n")) {
-      if (!line.trim()) continue;
-      try { out.push(JSON.parse(line)); } catch {}
-    }
-  }
-  return out.sort((a, b) => a.ts.localeCompare(b.ts));
+function readEventsWindow(root: string): LogEvent[] {
+  return readEvents(root);
 }
 
 // ── SNAPSHOTS + ROLLBACK ──
@@ -358,11 +350,5 @@ function extractActiveLever(root: string): string | null {
 }
 
 function emitSafe(root: string, type: string, payload: Record<string, unknown>): void {
-  try {
-    const { writeFileSync, appendFileSync } = require("node:fs") as typeof import("node:fs");
-    const date = new Date().toISOString().slice(0, 10);
-    const eventsDir = join(root, ".bandit", "events");
-    mkdirSync(eventsDir, { recursive: true });
-    appendFileSync(join(eventsDir, `${date}.jsonl`), JSON.stringify({ type, ts: new Date().toISOString(), ...payload }) + "\n");
-  } catch {}
+  try { appendEvent(root, type, payload); } catch {}
 }

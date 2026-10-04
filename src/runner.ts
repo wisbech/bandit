@@ -1,17 +1,15 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { splitArgv } from "./verify";
+import { parseCard, findCardDir, type CardFolder } from "./kernel/card";
+
+import { runArgv, defaultExec, packObservation, type Exec } from "./kernel/judge";
+
+export { parseCard, findCardDir, type CardFolder };
+export { runArgv, defaultExec, packObservation, type Exec };
 
 // runner.ts — compose a bandit folder + a card into an execution.
 // Each stage is a small function; no transport classes. ~150 lines.
-
-export interface CardFolder {
-  id: string;
-  column: "backlog" | "in-progress" | "review" | "done";
-  dir: string;
-  frontmatter: Record<string, string>;
-  body: string;
-}
 
 export interface SerfFolder {
   name: string;
@@ -40,28 +38,7 @@ export interface RunResult {
   stalled?: boolean;  // killed for idling or run timeout
 }
 
-// ── CARD PARSING (card-as-folder) ──
-
-export function parseCard(dir: string): CardFolder {
-  const raw = readFileSync(join(dir, "card.md"), "utf-8");
-  const frontmatter: Record<string, string> = {};
-  let body = raw;
-  const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n/);
-  if (fmMatch) {
-    for (const line of fmMatch[1].split("\n")) {
-      const m = line.match(/^(\w+):\s*(.+)$/);
-      if (m) frontmatter[m[1]] = m[2].trim();
-    }
-    body = raw.slice(fmMatch[0].length);
-  }
-  return {
-    id: dir.split("/").pop()!,
-    column: (frontmatter.column as CardFolder["column"]) ?? "backlog",
-    dir,
-    frontmatter,
-    body,
-  };
-}
+// ── CARD PARSING (card-as-folder): lives in kernel/card.ts ──
 
 // Extract standard v2-style card sections from the body into template vars,
 // so both card shapes work: frontmatter-based (bandit init) and section-based
@@ -83,15 +60,6 @@ export function cardVars(card: CardFolder): Record<string, unknown> {
     context: card.frontmatter.context ?? section("Context"),
     body: card.body,
   };
-}
-
-// Re-resolve a card's directory after a move: search the board for its id.
-export function findCardDir(root: string, id: string): string | null {
-  for (const col of ["backlog", "in-progress", "review", "done"]) {
-    const candidate = join(root, ".bandit", "board", col, id);
-    if (existsSync(join(candidate, "card.md"))) return candidate;
-  }
-  return null;
 }
 
 // ── SERF FOLDER READING ──
@@ -705,39 +673,7 @@ export async function selfVerifyGateAsync(gate: GateResult, cardDir: string, tim
   return result;
 }
 
-// Short synchronous tool calls (git, gh): argv, no shell. Injectable in tests.
-export type Exec = (argv: string[], cwd: string) => { code: number; stdout: string; stderr: string };
-export const defaultExec: Exec = (argv, cwd) => {
-  try {
-    const p = Bun.spawnSync(argv, { cwd, stdout: "pipe", stderr: "pipe" });
-    return { code: p.exitCode ?? 1, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
-  } catch (e) {
-    return { code: 127, stdout: "", stderr: e instanceof Error ? e.message : String(e) }; // not installed
-  }
-};
-
-// One argv, no shell, in cwd: combined stdout+stderr and the exit code
-// (127 = could not spawn, 124 = timed out). Shared by self-verify and accept.
-export async function runArgv(argv: string[], cwd: string, timeoutMs: number): Promise<{ exitCode: number; timedOut: boolean; output: Buffer }> {
-  let proc: ReturnType<typeof Bun.spawn>;
-  try {
-    proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
-  } catch (e) {
-    // argv[0] not found / not executable — the shell's 127, without a shell
-    return { exitCode: 127, timedOut: false, output: Buffer.from(`${e instanceof Error ? e.message : String(e)}\n`) };
-  }
-  // Combined stdout+stderr, in arrival order.
-  const chunks: Uint8Array[] = [];
-  const pump = async (s: ReadableStream<Uint8Array>) => { for await (const c of s) chunks.push(c); };
-  const pumps = Promise.all([pump(proc.stdout as ReadableStream<Uint8Array>), pump(proc.stderr as ReadableStream<Uint8Array>)]).catch(() => {});
-  let timedOut = false;
-  const timer = setTimeout(() => { try { proc.kill(); } catch {} timedOut = true; }, timeoutMs);
-  const code = await proc.exited;
-  clearTimeout(timer);
-  // A grandchild may hold the pipes open after exit/kill; don't wait on it forever.
-  await Promise.race([pumps, new Promise((r) => setTimeout(r, 2_000))]);
-  return { exitCode: timedOut ? 124 : code, timedOut, output: Buffer.concat(chunks) };
-}
+// Exec, defaultExec and runArgv live in kernel/judge.ts; re-exported above.
 
 // ── EVIDENCE-PRESERVING REDUCER (SoL-Pi appropriation) ──
 // A cheap model compresses a large log into a compact receipt; a deterministic
@@ -810,29 +746,7 @@ export async function reduceEvidence(
   }
 }
 
-// ── OBSERVATIONPACK (SoL-Pi appropriation) ──
-// Large inputs to the next stage (the critic) become a stable handle (file on
-// disk, exact and retrievable) + a bounded excerpt. Nothing is lost — the
-// critic can read the file; we just stop paying to inline it.
-
-export function packObservation(output: string, cardDir: string, label: string, thresholdBytes = 10_240): { text: string; archived: boolean; path?: string } {
-  if (output.length <= thresholdBytes) return { text: output, archived: false };
-  const packDir = join(cardDir, "observations");
-  mkdirSync(packDir, { recursive: true });
-  const path = join(packDir, `${label}.log`);
-  writeFileSync(path, output);
-  const head = output.split("\n").slice(0, 12).join("\n");
-  const tail = output.split("\n").slice(-12).join("\n");
-  const text = [
-    `[OBSERVATION PACKED — ${output.length} bytes archived at ${path}]`,
-    "--- head ---",
-    head,
-    "--- tail ---",
-    tail,
-    "[Use `sed -n 'X,Yp' " + path + "` to read exact ranges on demand.]",
-  ].join("\n");
-  return { text, archived: true, path };
-}
+// ObservationPack (packObservation) lives in kernel/judge.ts; re-exported above.
 
 // One complete execution: render prompt from bandit folder, run transport,
 // evaluate the gate, persist output + gate fingerprint into the card folder.

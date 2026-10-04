@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { parseCriticVerdict, runLoop, repairBoardFromEvents, cardsIn } from "../src/loop";
 import { parseCard } from "../src/runner";
-import { seedDefaultFolders } from "./v30-helpers";
+import { seedDefaultFolders, readRawEvents } from "./v30-helpers";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -123,7 +123,7 @@ describe("V3-1: plan phase", () => {
       transport: { kind: "headless", command: stub("stub-e.sh", greenOutput()), args: [] },
       maxRetries: 1,
     });
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).toContain("plan.started");
     expect(events).toContain("plan.finished");
   });

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, watch, closeSync, openSync, readSync, fstatSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
+import { eventFiles } from "./kernel/log";
 
 // watch.ts — the visibility adapter. Agents in bandit are headless processes;
 // visibility comes from what they leave on disk: events (truth), card output
@@ -93,20 +94,16 @@ export class EventTail {
   // offset, never re-scanned; rotation (a new jsonl appearing) is picked up
   // by statting the dir on each fs.watch wakeup (cheap, event-gated).
   drain(): WaveEvent[] {
-    const eventsDir = dir("events");
-    if (!existsSync(eventsDir)) return [];
-    const files = readdirSync(eventsDir).filter((f) => f.endsWith(".jsonl")).sort();
     const fresh: WaveEvent[] = [];
-    for (const f of files) {
-      const path = join(eventsDir, f);
+    for (const path of eventFiles(process.cwd())) {
       let size = 0;
       try { size = statSync(path).size; } catch { continue; }
-      let cursor = this.cursors.get(f);
+      let cursor = this.cursors.get(path);
       if (!cursor) {
         // Fresh file (first sight: the initial render, or a rotation) — read
         // from 0 like `tail -F` picking up a file, then go incremental.
         cursor = { offset: 0, partial: "" };
-        this.cursors.set(f, cursor);
+        this.cursors.set(path, cursor);
       }
       if (size < cursor.offset) cursor = { offset: 0, partial: "" }; // truncated
       if (size <= cursor.offset) continue; // nothing appended since last visit

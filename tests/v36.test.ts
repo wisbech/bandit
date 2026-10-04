@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { runLoop } from "../src/loop";
 import { parseSummon } from "../src/loop";
-import { seedDefaultFolders } from "./v30-helpers";
+import { seedDefaultFolders, readRawEvents } from "./v30-helpers";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -63,7 +63,7 @@ describe("V3-6: summoned voices", () => {
     seedCard("summon-card", `${"- build module ".repeat(20)}\n\n${Array.from({ length: 5 }, (_, i) => `- criterion ${i} is verifiable`).join("\n")}\n`);
     const transport = writeStub("stub-sum.sh", SUMMON_STUB);
     await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 2 });
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).toContain("consult.summoned");
     expect(events).toContain('"role":"researcher"');
     expect(events).toContain("consult.reweighed");
@@ -92,7 +92,7 @@ describe("V3-6: summoned voices", () => {
       "esac",
     ].join("\n"));
     await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 1 });
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).toContain("consult.summon_failed");
     expect(events).toContain('"reason":"no such serf prompt"');
     // no child spawned for a failed summon
@@ -113,7 +113,7 @@ describe("V3-6: summoned voices", () => {
       "esac",
     ].join("\n"));
     await runLoop({ once: true, root, transport: { kind: "headless", command: transport, args: [] }, maxRetries: 3 });
-    const events = readFileSync(join(root, ".bandit", "events", new Date().toISOString().slice(0, 10) + ".jsonl"), "utf-8");
+    const events = readRawEvents(root);
     expect(events).toContain('"thread":"stagnation"');
     expect(events).toContain("consult.summoned");
     // no spawn on a consult summons (only specialist routes spawn "specialists/")

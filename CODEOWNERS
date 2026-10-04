@@ -1,0 +1,6 @@
+# The kernel is human-owned (KERNEL.md). The loop never merges these paths.
+/src/kernel/ @wisbech
+/KERNEL.md @wisbech
+/checks/ @wisbech
+/bandit.json @wisbech
+/CODEOWNERS @wisbech
