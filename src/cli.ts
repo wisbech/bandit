@@ -4,6 +4,7 @@ import { execSync } from "node:child_process";
 import { runLoop, cardsIn, readEvents } from "./loop";
 import { dossierCardDir } from "./dossier";
 import { validateVerifyCommand } from "./verify";
+import { shrinkMain } from "./shrink";
 
 // cli.ts — command table (~30 lines). No switch-casing.
 
@@ -334,6 +335,11 @@ const COMMANDS: Command[] = [
       console.log(JSON.stringify(report));
       process.exit(0);
     },
+  },
+  {
+    name: "shrink-check",
+    summary: "bandit shrink-check [--base <ref>] [--path <dir>] [--json]",
+    fn: (args) => process.exit(shrinkMain(args)),
   },
   {
     name: "ratify",
