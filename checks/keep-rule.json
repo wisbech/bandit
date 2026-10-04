@@ -1,0 +1,14 @@
+{
+  "card": "keep-rule",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/keep-rule.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/keep-rule.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/keep-rule.check.ts": "ce1e82dbb33f916e6dd981e0cc05da09c269df5ceaab5637887706fce4abea99"
+  }
+}

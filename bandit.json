@@ -1,5 +1,5 @@
 {
   "setup": [["bun", "install", "--frozen-lockfile"]],
   "gates": [["bun", "test", "--timeout", "30000"], ["bunx", "tsc", "--noEmit"]],
-  "protected": ["tsconfig.json"]
+  "protected": ["tsconfig.json", "tests/seed/", "scripts/seed/", "seed/"]
 }

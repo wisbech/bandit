@@ -1,0 +1,15 @@
+{
+  "card": "no-heartbeat",
+  "verify": [
+    "bash",
+    "scripts/seed/no-heartbeat.sh"
+  ],
+  "checkPaths": [
+    "tests/seed/no-heartbeat.check.ts",
+    "scripts/seed/no-heartbeat.sh"
+  ],
+  "sha256": {
+    "tests/seed/no-heartbeat.check.ts": "061ee7b485b8139b2c49aa81ccb9af5ccf01aa78f007ac3da5a8745e020b5171",
+    "scripts/seed/no-heartbeat.sh": "73cd5adcb2c3ac345374cfde0c5d7b27fe6e27dc862fc6b5f6ac28ba5a019669"
+  }
+}

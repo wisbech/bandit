@@ -1,0 +1,14 @@
+{
+  "card": "refiner-window",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/refiner-window.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/refiner-window.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/refiner-window.check.ts": "c937aa122c30091b386a8165c3cae3405a72d7abe8c608458efd05ea8f8ff958"
+  }
+}

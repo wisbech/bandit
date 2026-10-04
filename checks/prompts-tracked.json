@@ -1,0 +1,14 @@
+{
+  "card": "prompts-tracked",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/prompts-tracked.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/prompts-tracked.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/prompts-tracked.check.ts": "b84ebce96bd75ed6d40055d7083077876a28c6dc7cc8aa28c109ccb43d2ff24e"
+  }
+}

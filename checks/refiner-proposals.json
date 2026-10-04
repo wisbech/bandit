@@ -1,0 +1,14 @@
+{
+  "card": "refiner-proposals",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/refiner-proposals.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/refiner-proposals.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/refiner-proposals.check.ts": "f98d72026790a6aa9a82336a82aa8c18648b36c7cd279e4bff249c9248104659"
+  }
+}

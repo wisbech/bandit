@@ -1,0 +1,14 @@
+{
+  "card": "cost-report",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/cost-report.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/cost-report.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/cost-report.check.ts": "a4095f64c72ca73fd8dd7e0703c80d5c37a2469f06a679ba934a5981ade4f789"
+  }
+}
