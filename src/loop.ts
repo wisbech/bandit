@@ -8,6 +8,7 @@ import {
 import { askRoundGate, type DecisionPort } from "./decisions";
 import { isolationMode, openWorktree, keepWorktree, discardWorktree } from "./isolation";
 import { appendEvent, readEvents as readKernelEvents, type LogEvent } from "./kernel/log";
+import { acceptRef as judge } from "./kernel/judge";
 
 // The decision port (dependency inversion): the loop consumes this interface
 // only. Adapters (systemone/laya, jev, future evaluators) live elsewhere and
@@ -938,19 +939,41 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     const wt = isolated ? openWorktree(config.root, card.id) : null;
     if (wt?.resetFrom) emit("isolation.branch_reset", { card: card.id, branch: wt.branch, previous: wt.resetFrom });
     let result: Awaited<ReturnType<typeof convergeCard>> | null = null;
+    // Rule 1: nothing counts until the judge says so. In isolation mode the
+    // kept branch is judged before the card may reach done; a red verdict
+    // sends it to review and the branch stays as evidence.
+    let verdict: string | undefined;
+    let judgeFailure: Record<string, unknown> | null = null;
     try {
       result = await convergeCard(wt ? { ...config, workDir: wt.dir, branch: wt.branch } : config, card, maxRetries, kind);
     } finally {
       if (wt && result === "converged") {
         const kept = keepWorktree(config.root, card.id, `bandit: ${card.id} ${card.frontmatter.title ?? ""}`.trim());
-        if (kept.error) emit("isolation.commit_failed", { card: card.id, branch: kept.branch, dir: wt.dir, reason: kept.error });
+        if (kept.error) {
+          emit("isolation.commit_failed", { card: card.id, branch: kept.branch, dir: wt.dir, reason: kept.error });
+          judgeFailure = { branch: kept.branch, error: "commit failed: nothing to judge" };
+        } else {
+          try {
+            const v = await judge({ root, cardId: card.id, ref: kept.branch, base: wt.base });
+            if (v.passed) verdict = v.sha;
+            else judgeFailure = { branch: kept.branch, sha: v.sha, gates: v.gates.map((g) => ({ name: g.name, exitCode: g.exitCode, argv: g.argv })) };
+          } catch (e) {
+            judgeFailure = { branch: kept.branch, error: String(e instanceof Error ? e.message : e).slice(0, 200) };
+          }
+        }
       } else if (wt) {
         emit("isolation.discarded", { card: card.id, branch: discardWorktree(config.root, card.id) });
       }
     }
-    if (result === "converged") {
+    if (result === "converged" && !wt) emit("judge.skipped", { card: card.id, reason: "shared mode" });
+    if (result === "converged" && judgeFailure) {
+      if (exitInProgress(root, card.id, "review")) {
+        emit("task.failed", { card: card.id, reason: "judge", ...judgeFailure });
+        failed += 1;
+      }
+    } else if (result === "converged") {
       if (exitInProgress(root, card.id, "done")) {
-        emit("card.completed", { card: card.id });
+        emit("card.completed", { card: card.id, ...(verdict ? { verdict } : {}) });
         completed += 1;
       }
     } else if (result === "requeued") {
