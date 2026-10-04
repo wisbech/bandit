@@ -1121,6 +1121,19 @@ const COMMANDS: Command[] = [
     },
   },
   {
+    name: "status",
+    summary: "read-only board snapshot (bandit status [--json])",
+    fn: async (args) => {
+      const { status } = await import("./port-status");
+      const s = status(process.cwd());
+      if (args.includes("--json")) { console.log(JSON.stringify(s)); return; }
+      for (const c of s.cards) {
+        console.log(`  ${c.column.padEnd(11)} ${c.id} ${c.verdict ?? "-"} ${c.ratified ? "ratified" : "-"}${c.claimedBy ? ` pid ${c.claimedBy.pid}` : ""}`);
+      }
+      console.log(s.lastEventTs ? `  last event ${s.lastEventTs}` : "  no events");
+    },
+  },
+  {
     name: "help",
     summary: "this message",
     fn: () => {
