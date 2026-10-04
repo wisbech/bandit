@@ -530,6 +530,27 @@ const COMMANDS: Command[] = [
     },
   },
   {
+    name: "prompts",
+    summary: "bandit prompts export [--force] — copy .bandit/serfs/<name>/prompt.md to tracked prompts/<name>/prompt.md",
+    fn: async (args) => {
+      if (args[0] !== "export") { console.error("usage: bandit prompts export [--force]"); process.exit(2); }
+      const { copyFileSync } = await import("node:fs");
+      const force = args.includes("--force");
+      const serfsDir = join(process.cwd(), ".bandit", "serfs");
+      const names = existsSync(serfsDir) ? readdirSync(serfsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) : [];
+      for (const name of names) {
+        const src = join(serfsDir, name, "prompt.md");
+        if (!existsSync(src)) continue;
+        const dst = join(process.cwd(), "prompts", name, "prompt.md");
+        if (existsSync(dst) && !force) { console.log(`  kept    prompts/${name}/prompt.md`); continue; }
+        mkdirSync(join(process.cwd(), "prompts", name), { recursive: true });
+        copyFileSync(src, dst);
+        console.log(`  written prompts/${name}/prompt.md`);
+      }
+      process.exit(0);
+    },
+  },
+  {
     name: "chat",
     summary: "walk into a serf's pane and talk — bandit chat [actor|critic|master] [--agent X]",
     fn: async (args) => {
