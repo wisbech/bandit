@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { parseCard, findCardDir, runSerfOnCard, parseGate, type TransportConfig, type CardFolder } from "./runner";
 import { askRoundGate, type DecisionPort } from "./decisions";
 import { isolationMode, openWorktree, keepWorktree, discardWorktree } from "./isolation";
+import { appendEvent, readEvents as readKernelEvents, type LogEvent } from "./kernel/log";
 
 // The decision port (dependency inversion): the loop consumes this interface
 // only. Adapters (systemone/laya, jev, future evaluators) live elsewhere and
@@ -80,25 +81,11 @@ function gradeDir(): string {
 // ── EVENTS (append-only truth) ──
 
 export function emit(type: string, payload: Record<string, unknown>): void {
-  const date = new Date().toISOString().slice(0, 10);
-  const file = join(dir("events"), `${date}.jsonl`);
-  writeFileSync(file, JSON.stringify({ type, ts: new Date().toISOString(), ...payload }) + "\n", { flag: "a" });
+  appendEvent(process.cwd(), type, payload);
 }
 
-export function readEvents(sinceTs?: string): { type: string; ts: string; [k: string]: unknown }[] {
-  const eventsDir = dir("events");
-  if (!existsSync(eventsDir)) return [];
-  const out: { type: string; ts: string; [k: string]: unknown }[] = [];
-  for (const f of readdirSync(eventsDir).filter((f) => f.endsWith(".jsonl"))) {
-    for (const line of readFileSync(join(eventsDir, f), "utf-8").split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const e = JSON.parse(line);
-        if (!sinceTs || e.ts > sinceTs) out.push(e);
-      } catch {}
-    }
-  }
-  return out.sort((a, b) => a.ts.localeCompare(b.ts));
+export function readEvents(sinceTs?: string): LogEvent[] {
+  return readKernelEvents(process.cwd(), sinceTs);
 }
 
 // ── BOARD (projection over card folders) ──
