@@ -1023,11 +1023,6 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     const backlogDir = join(config.root, ".bandit", "board", "backlog");
     const inProgressDir = join(config.root, ".bandit", "board", "in-progress");
     console.log("  ◌ board drained — watching for new cards (event-driven, Ctrl+C to stop)\n");
-    // visible liveness: one heartbeat per minute so holding never looks stuck
-    const heartbeat = setInterval(() => {
-      const t = new Date().toTimeString().slice(0, 8);
-      console.log("  ◌ " + t + " watching… (board empty)");
-    }, 60_000);
     let waking = false;
     const wake = async () => {
       if (kernelCardsIn(config.root, "backlog").length === 0 && kernelCardsIn(config.root, "in-progress").length === 0) return;
