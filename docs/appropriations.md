@@ -34,7 +34,7 @@ Their headline result: 44.7–49.0% token-traffic reduction and ~⅓ cost at com
 ### Event sourcing
 **[Fowler's event-sourcing pattern](https://martinfowler.com/eaaDev/EventSourcing.html)** · [Kafka's log abstraction](https://kafka.apache.org/documentation/#log)
 
-`.bandit/events/*.jsonl` in [src/loop.ts](../src/loop.ts) — append-only JSONL is the truth; the board is a projection; `repairBoardFromEvents` replays and repairs. State is derivable, truth is the log.
+`.bandit/events/*.jsonl` in [src/loop.ts](../src/loop.ts) — append-only JSONL is the audit record of what happened. The board itself is not replayed from it: a card's folder is the only truth for its column (`src/kernel/card.ts`).
 
 ### The Ralph Loop (Geoffrey Huntley) — implement → review → revise
 **[ralph.wiggum](https://ghuntley.com/ralph/)** — "a technique for getting agents to do more than one turn of work": run the loop until the completion criterion holds.
