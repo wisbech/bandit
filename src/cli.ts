@@ -6,6 +6,7 @@ import { dossierCardDir } from "./dossier";
 import { validateVerifyCommand } from "./verify";
 import { appendEvent } from "./kernel/log";
 import { shrinkMain } from "./shrink";
+import { guard } from "./port";
 
 // cli.ts — command table (~30 lines). No switch-casing.
 
@@ -1118,6 +1119,31 @@ const COMMANDS: Command[] = [
       }
       console.log(`\n  ${failed === 0 ? "healthy — all checks pass" : failed + " check(s) failed"}${failed === 0 && checks.some((c) => c.warn) ? " (warnings present)" : ""}\n`);
       if (failed > 0) process.exitCode = 1;
+    },
+  },
+  {
+    name: "guard",
+    summary: "may I edit these paths? bandit guard [--json] [--repo <dir>] <path>... — exit 0 allowed, 1 any hit, 2 usage",
+    fn: (args) => {
+      const usage = "usage: bandit guard [--json] [--repo <dir>] <path>...";
+      let json = false;
+      let repo = process.cwd();
+      const paths: string[] = [];
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === "--json") json = true;
+        else if (a === "--repo") {
+          const v = args[++i];
+          if (v === undefined) { console.error(usage); process.exit(2); }
+          repo = v;
+        } else if (a.startsWith("--")) { console.error(usage); process.exit(2); }
+        else paths.push(a);
+      }
+      if (paths.length === 0) { console.error(usage); process.exit(2); }
+      const result = guard(repo, paths);
+      if (json) console.log(JSON.stringify(result));
+      else for (const h of result.hits) console.log(h);
+      process.exit(result.allowed ? 0 : 1);
     },
   },
   {
