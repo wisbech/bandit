@@ -1,0 +1,14 @@
+{
+  "card": "port-guard",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/port-guard.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/port-guard.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/port-guard.check.ts": "4fcb5504e39b962b75ec692da898877d1cb66d9f96dc13193397e15bd2c38ce0"
+  }
+}

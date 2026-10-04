@@ -1,0 +1,14 @@
+{
+  "card": "adapters",
+  "verify": [
+    "bun",
+    "test",
+    "./tests/seed/adapters.check.ts"
+  ],
+  "checkPaths": [
+    "tests/seed/adapters.check.ts"
+  ],
+  "sha256": {
+    "tests/seed/adapters.check.ts": "47e10a8c7d5f5ea6b6cf22c7e7f5f07ba93c6e708d5cc9ad1b77bc79909d4593"
+  }
+}
