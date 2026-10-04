@@ -11,6 +11,7 @@ import { isolationMode, openWorktree, keepWorktree, discardWorktree } from "./is
 import { appendEvent, readEvents as readKernelEvents, type LogEvent } from "./kernel/log";
 import { acceptRef as judge } from "./kernel/judge";
 import { readScore } from "./kernel/score";
+import { leverOf, leverHistory, leverProgress, orderFrontier } from "./progress";
 
 // The decision port (dependency inversion): the loop consumes this interface
 // only. Adapters (systemone/laya, jev, future evaluators) live elsewhere and
@@ -548,15 +549,6 @@ function recordAmendRequeue(card: CardFolder): void {
 // any expensive attempt. Spawn a specialist serf when the same missing
 // capability is cited in two consecutive round triages.
 
-function leverOf(card: CardFolder): string | null {
-  const fm = slugify(card.frontmatter.lever ?? "");
-  if (fm) return `lever:${fm}`;
-  const m = card.body.match(/## Lever\n([\s\S]*?)(?=\n## |$)/m);
-  const first = m?.[1]?.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
-  const slug = first ? slugify(first).slice(0, 48).replace(/-$/, "") : "";
-  return slug ? `lever:${slug}` : null;
-}
-
 function slugify(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
@@ -933,7 +925,25 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     if (claim && sameClaimant(claim, self())) mine.push(c.id);
     else if (!claim || !claimantAlive(claim)) reclaimCard(root, c.id, claim);
   }
-  const frontier = [...mine, ...kernelCardsIn(root, "backlog").map((c) => c.id)];
+  let progressOrder = false;
+  try {
+    progressOrder = JSON.parse(readFileSync(join(root, ".bandit", "config.json"), "utf-8"))?.order === "progress";
+  } catch {
+    progressOrder = false; // missing or bad JSON = id order
+  }
+  const backlog = kernelCardsIn(root, "backlog");
+  let backlogOrder = backlog.map((c) => c.id);
+  if (progressOrder) {
+    // Pull where cost is falling; park levers that stayed flat (they stay in backlog).
+    const stats = leverProgress(leverHistory(root));
+    const { order, parked } = orderFrontier(backlog.map((c) => ({ id: c.id, lever: leverOf(c) })), stats);
+    for (const id of parked) {
+      const lever = leverOf(backlog.find((c) => c.id === id)!)!;
+      emit("card.parked", { card: id, lever, flat: stats[lever].flat });
+    }
+    backlogOrder = order;
+  }
+  const frontier = [...mine, ...backlogOrder];
   for (const id of frontier) {
     const liveDir = findCardDir(root, id);
     const liveCard = liveDir ? readCard(liveDir) : null;
