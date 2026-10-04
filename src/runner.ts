@@ -64,11 +64,14 @@ export function cardVars(card: CardFolder): Record<string, unknown> {
 
 // ── SERF FOLDER READING ──
 
-export function readSerfFolder(dir: string): SerfFolder {
+// A tracked prompt at <root>/prompts/<name>/prompt.md wins over the git-ignored .bandit copy.
+export function readSerfFolder(dir: string, root?: string): SerfFolder {
+  const name = dir.split("/").pop()!;
+  const tracked = root ? join(root, "prompts", name, "prompt.md") : "";
   return {
-    name: dir.split("/").pop()!,
+    name,
     dir,
-    prompt: readFileSync(join(dir, "prompt.md"), "utf-8"),
+    prompt: readFileSync(tracked && existsSync(tracked) ? tracked : join(dir, "prompt.md"), "utf-8"),
     identity: readFileSync(join(dir, "serf.md"), "utf-8"),
     state: existsSync(join(dir, "state.md")) ? readFileSync(join(dir, "state.md"), "utf-8") : "",
   };
@@ -743,7 +746,7 @@ export async function reduceEvidence(
 // Then: self-verify the gate (re-run the reported command for the ACTUAL exit
 // code) and reduce oversized logs into verified evidence receipts.
 export async function runSerfOnCard(opts: RunOptions): Promise<{ run: RunResult; gate: GateResult; unchangedGate: boolean; selfVerify?: SelfVerifyResult; evidence?: EvidenceReceipt }> {
-  const serf = readSerfFolder(opts.serfDir);
+  const serf = readSerfFolder(opts.serfDir, opts.root);
   const card = parseCard(opts.cardDir);
   const prompt = renderPrompt(serf.prompt, { ...opts.vars, serf: { name: serf.name }, card: { ...cardVars(card), dir: opts.cardDir } });
 
