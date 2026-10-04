@@ -40,6 +40,7 @@ export interface RefineResult {
   edits: RefinerEdit[];
   applied: RefinerEdit[];
   skipped: { edit: RefinerEdit; note: string }[];
+  proposed: string[];
   snapshot?: string;
 }
 
@@ -258,14 +259,14 @@ function skillEvidenceOk(op: RefinerEdit["op"], evidence: string): { ok: boolean
 
 export async function runRefinePass(root: string, refineFn: (prompt: string) => Promise<string>, options: { force?: boolean } = {}): Promise<RefineResult> {
   const serfs = existsSync(join(root, ".bandit", "serfs")) ? readdirSync(join(root, ".bandit", "serfs")).filter((f) => existsSync(join(root, ".bandit", "serfs", f, "serf.md"))) : [];
-  if (serfs.length === 0) return { ran: false, reason: "no folder serfs", signatures: [], edits: [], applied: [], skipped: [] };
+  if (serfs.length === 0) return { ran: false, reason: "no folder serfs", signatures: [], edits: [], applied: [], skipped: [], proposed: [] };
 
   const events = readEventsWindow(root);
   const signatures = classifySignatures(events);
   const trigger = shouldTrigger(root);
 
   if (!options.force && !trigger.trigger) {
-    return { ran: false, reason: trigger.reason, signatures, edits: [], applied: [], skipped: [] };
+    return { ran: false, reason: trigger.reason, signatures, edits: [], applied: [], skipped: [], proposed: [] };
   }
 
   // Model floor lives in the caller (config); the refiner refuses weak models there.
@@ -301,11 +302,19 @@ Rules: memory.add for lessons; prompt.update only tied to a signature; skill.cre
     edits = [];
   }
 
+  const propose = refinerMode(root) === "propose";
   const applied: RefinerEdit[] = [];
   const skipped: { edit: RefinerEdit; note: string }[] = [];
-  for (const edit of edits.slice(0, 8)) {
+  const proposed: string[] = [];
+  for (const [index, edit] of edits.slice(0, 8).entries()) {
     if (!edit.serf || !serfs.includes(edit.serf)) { skipped.push({ edit, note: "unknown serf" }); continue; }
     if (!edit.evidence || edit.evidence.length < 4) { skipped.push({ edit, note: "insufficient evidence" }); continue; }
+    if (propose) {
+      const id = writeProposalCard(root, edit, index);
+      proposed.push(id);
+      emitSafe(root, "refiner.proposed", { card: id, serf: edit.serf, target: edit.target, op: edit.op });
+      continue;
+    }
     const r = applyEdit(root, edit);
     if (r.applied) applied.push(edit);
     else skipped.push({ edit, note: r.note });
@@ -345,7 +354,36 @@ Rules: memory.add for lessons; prompt.update only tied to a signature; skill.cre
     snapshot: snapshotTs,
   });
 
-  return { ran: true, signatures, edits, applied, skipped, snapshot: snapshotTs };
+  return { ran: true, signatures, edits, applied, skipped, proposed, snapshot: snapshotTs };
+}
+
+// ── PROPOSE MODE ──
+// With {"refiner":"propose"} in .bandit/config.json the refiner applies nothing:
+// each edit becomes a backlog card a human ratifies before it is worked.
+
+function refinerMode(root: string): string | undefined {
+  try {
+    const cfg = JSON.parse(readFileSync(join(root, ".bandit", "config.json"), "utf-8"));
+    return typeof cfg?.refiner === "string" ? cfg.refiner : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const oneLine = (v: unknown): string => String(v ?? "").replace(/\s+/g, " ").trim();
+const slug = (v: unknown): string => oneLine(v).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "x";
+
+function writeProposalCard(root: string, edit: RefinerEdit, index: number): string {
+  const rand = Math.random().toString(36).slice(2, 6).padEnd(4, "0");
+  const id = `proposal-${slug(edit.serf)}-${slug(edit.target)}-${Date.now().toString(36)}-${index}-${rand}`;
+  const dir = join(root, ".bandit", "board", "backlog", id);
+  mkdirSync(dir, { recursive: true });
+  const title = oneLine(`Refiner proposal: ${edit.target} ${edit.op} for ${edit.serf}${edit.reason ? ` — ${edit.reason}` : ""}`).slice(0, 160);
+  const fm = [`id: ${id}`, `title: ${title}`, `serf: ${oneLine(edit.serf)}`, `target: ${oneLine(edit.target)}`, `op: ${oneLine(edit.op)}`];
+  if (edit.name) fm.push(`name: ${oneLine(edit.name)}`);
+  const body = `## Content\n${edit.content ?? ""}\n\n## Evidence\n${edit.evidence}\n\n## Reason\n${edit.reason ?? ""}\n`;
+  writeFileSync(join(dir, "card.md"), `---\n${fm.join("\n")}\n---\n${body}`);
+  return id;
 }
 
 // The active lever is recorded in the factory's plan (lever: field) or the
