@@ -23,6 +23,7 @@ requirement is that something is gone.
 | `cost-report` | `bandit cost [--json]`: rounds, tokens, judge acceptance per card; tokens per accepted card | `bun test ./tests/seed/cost-report.check.ts` | `tests/seed/cost-report.check.ts` |
 | `bench` | `bandit bench <board-dir> [--json]`: frozen board in a temp git project, judged, one JSON line out, temp removed | `bun test ./tests/seed/bench.check.ts` | `tests/seed/bench.check.ts` |
 | `keep-rule` | `keepDecision(pairs, total?)` in `src/keep-rule.ts`: paired sign test, abort at -2, keep at +5, token tie-break | `bun test ./tests/seed/keep-rule.check.ts` | `tests/seed/keep-rule.check.ts` |
+| `folder-router` | `routeCard`/`routeCandidates` in `src/router.ts`: serf folders and their `## Mission` are the routing table, picked by the port's Choice; `"router": "folders"` makes the loop run the routed folder as the actor | `bun test ./tests/seed/folder-router.check.ts` | `tests/seed/folder-router.check.ts` |
 
 No card touches the kernel. Each starts from the base tree alone and can be done in any order.
 
@@ -58,6 +59,7 @@ bandit ratify failure-draft     --paths tests/seed/failure-draft.check.ts
 bandit ratify cost-report       --paths tests/seed/cost-report.check.ts
 bandit ratify bench             --paths tests/seed/bench.check.ts
 bandit ratify keep-rule         --paths tests/seed/keep-rule.check.ts
+bandit ratify folder-router     --paths tests/seed/folder-router.check.ts
 ```
 
 `ratify` takes the verify argv from the card's `verify:` line and writes `checks/<id>.json` with the
@@ -78,6 +80,7 @@ One line per card: the verify argv, and the first failing assertion observed.
 - `cost-report`: 4 of 4 fail; first, `bandit cost --json` exit code expected 0, received 1 (`unknown command: cost`).
 - `bench`: 2 of 2 fail; first, `bench exited 1` (`unknown command: bench`); a missing board dir exits 1, expected 2.
 - `keep-rule`: 20 of 20 fail; first, `existsSync(src/keep-rule.ts)` expected `true`, received `false`.
+- `folder-router` (added later, on `seed/stage1` `1439b08`): 21 of 22 fail; first, `existsSync(src/router.ts)` expected `true`, received `false`; the loop wiring check finds only `ACTOR-PROMPT-MARKER` in the worker's prompts, expected `TESTER-PROMPT-MARKER`. The one that passes is the default-config guard (no `router` key: actor prompt, no `card.routed`), which must stay green. Green against a throwaway `src/router.ts` plus the `convergeCard` hook, 3 runs of 3; that code was not kept.
 
 Default suite on the same commit with these files added: `bun test` 178 pass, 1 skip, 0 fail;
 `bunx tsc --noEmit` clean.
