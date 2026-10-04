@@ -316,6 +316,9 @@ const COMMANDS: Command[] = [
         if (r.results.length === 0) console.log("  (no cards)");
         console.log(`  total: ${r.cards} card(s), ${r.accepted} accepted, ${r.rounds} round(s), ${r.tokens} tokens, cost per accepted card ${r.costPerAccepted ?? "n/a"}`);
       }
+    },
+  },
+  {
     name: "bench",
     summary: "bandit bench <board-dir> [--json] — run a frozen board once in a temp project; last stdout line is the JSON report",
     fn: async (args) => {
