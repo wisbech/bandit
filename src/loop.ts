@@ -860,6 +860,44 @@ async function convergeCard(
   return "no-convergence";
 }
 
+// Rule 5: a failure writes the next card, unratified. The draft sits in
+// .bandit/drafts/ (not a board column) with no `verify:` until a human
+// writes and ratifies its check.
+export function writeFailureDraft(root: string, cardId: string): string {
+  const draftId = `${cardId}-retry`;
+  const cardDir = findCardDir(root, cardId);
+  const red = readKernelEvents(root).filter((e) => e.type === "verification.red" && e.card === cardId).pop();
+  const cardVerify = cardDir ? parseCard(cardDir).frontmatter.verify : undefined;
+  const command = String(red?.command || cardVerify || "(none)").replace(/\s+/g, " ").slice(0, 500);
+  const logPath = cardDir ? join(cardDir, "verification-output.log") : "";
+  const tail = logPath && existsSync(logPath) ? readFileSync(logPath, "utf-8").slice(-2000).replace(/```/g, "'''") : "";
+  const md = [
+    "---",
+    `id: ${draftId}`,
+    `title: retry ${cardId}: a smaller step`,
+    "---",
+    `# retry ${cardId}: a smaller step`,
+    "",
+    `Failed card: ${cardId}`,
+    "",
+    `Last gate: ${command}`,
+    "",
+    "```",
+    tail,
+    "```",
+    "",
+    "## Task",
+    `Take one smaller step toward ${cardId}: make the first failing part of the gate above pass, and nothing else.`,
+    "",
+  ].join("\n");
+  const dir = join(root, ".bandit", "drafts", draftId);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "card.md");
+  writeFileSync(path, md);
+  appendEvent(root, "card.drafted", { card: cardId, draft: draftId, path });
+  return path;
+}
+
 export async function runLoop(config: LoopConfig): Promise<{ processed: number; completed: number; failed: number }> {
   ensureScaffold();
   let processed = 0, completed = 0, failed = 0;
@@ -944,6 +982,7 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
     if (result === "converged" && judgeFailure) {
       if (exitInProgress(root, card.id, "review")) {
         emit("task.failed", { card: card.id, reason: "judge", ...judgeFailure });
+        writeFailureDraft(root, card.id);
         failed += 1;
       }
     } else if (result === "converged") {
@@ -957,6 +996,7 @@ export async function runLoop(config: LoopConfig): Promise<{ processed: number; 
       exitInProgress(root, card.id, "backlog");
     } else if (exitInProgress(root, card.id, "review")) {
       emit("task.failed", { card: card.id, reason: "no-convergence", attempts: maxRetries });
+      writeFailureDraft(root, card.id);
       failed += 1;
     }
   }
