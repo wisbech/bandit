@@ -1,17 +1,12 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { splitArgv } from "./verify";
+import { parseCard, findCardDir, type CardFolder } from "./kernel/card";
+
+export { parseCard, findCardDir, type CardFolder };
 
 // runner.ts — compose a bandit folder + a card into an execution.
 // Each stage is a small function; no transport classes. ~150 lines.
-
-export interface CardFolder {
-  id: string;
-  column: "backlog" | "in-progress" | "review" | "done";
-  dir: string;
-  frontmatter: Record<string, string>;
-  body: string;
-}
 
 export interface SerfFolder {
   name: string;
@@ -40,28 +35,7 @@ export interface RunResult {
   stalled?: boolean;  // killed for idling or run timeout
 }
 
-// ── CARD PARSING (card-as-folder) ──
-
-export function parseCard(dir: string): CardFolder {
-  const raw = readFileSync(join(dir, "card.md"), "utf-8");
-  const frontmatter: Record<string, string> = {};
-  let body = raw;
-  const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n/);
-  if (fmMatch) {
-    for (const line of fmMatch[1].split("\n")) {
-      const m = line.match(/^(\w+):\s*(.+)$/);
-      if (m) frontmatter[m[1]] = m[2].trim();
-    }
-    body = raw.slice(fmMatch[0].length);
-  }
-  return {
-    id: dir.split("/").pop()!,
-    column: (frontmatter.column as CardFolder["column"]) ?? "backlog",
-    dir,
-    frontmatter,
-    body,
-  };
-}
+// ── CARD PARSING (card-as-folder): lives in kernel/card.ts ──
 
 // Extract standard v2-style card sections from the body into template vars,
 // so both card shapes work: frontmatter-based (bandit init) and section-based
@@ -83,15 +57,6 @@ export function cardVars(card: CardFolder): Record<string, unknown> {
     context: card.frontmatter.context ?? section("Context"),
     body: card.body,
   };
-}
-
-// Re-resolve a card's directory after a move: search the board for its id.
-export function findCardDir(root: string, id: string): string | null {
-  for (const col of ["backlog", "in-progress", "review", "done"]) {
-    const candidate = join(root, ".bandit", "board", col, id);
-    if (existsSync(join(candidate, "card.md"))) return candidate;
-  }
-  return null;
 }
 
 // ── SERF FOLDER READING ──

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { parseCard, findCardDir, runSerfOnCard, parseGate, type TransportConfig, type CardFolder } from "./runner";
+import { COLUMNS, cardsIn as kernelCardsIn, moveCard as kernelMoveCard } from "./kernel/card";
 import { askRoundGate, type DecisionPort } from "./decisions";
 import { isolationMode, openWorktree, keepWorktree, discardWorktree } from "./isolation";
 import { appendEvent, readEvents as readKernelEvents, type LogEvent } from "./kernel/log";
@@ -24,8 +25,6 @@ export interface LoopConfig {
   workDir?: string;           // per card, isolation mode: the card's worktree (default: root)
   branch?: string;            // per card, isolation mode: bandit/<card-id>, carried by `converged`
 }
-
-const COLUMNS = ["backlog", "in-progress", "review", "done"] as const;
 
 function dir(...parts: string[]): string {
   return join(process.cwd(), ".bandit", ...parts);
@@ -91,23 +90,11 @@ export function readEvents(sinceTs?: string): LogEvent[] {
 // ── BOARD (projection over card folders) ──
 
 export function cardsIn(column: (typeof COLUMNS)[number]): CardFolder[] {
-  const colDir = dir("board", column);
-  if (!existsSync(colDir)) return [];
-  return readdirSync(colDir)
-    .sort() // frontier order = id order (APFS readdir is hash order); numbered titles run in sequence
-    .map((name) => join(colDir, name))
-    .filter((d) => existsSync(join(d, "card.md")))
-    .map((d) => parseCard(d));
+  return kernelCardsIn(process.cwd(), column);
 }
 
 export function moveCard(card: CardFolder, to: (typeof COLUMNS)[number]): void {
-  // The card may have been moved since it was read — resolve its current dir.
-  const current = findCardDir(configRoot(), card.id) ?? card.dir;
-  const target = dir("board", to, card.id);
-  renameSync(current, target);
-  const cardMd = join(target, "card.md");
-  const raw = readFileSync(cardMd, "utf-8").replace(/^column: .+$/m, `column: ${to}`);
-  writeFileSync(cardMd, raw);
+  kernelMoveCard(process.cwd(), card, to);
 }
 
 // Hand intervention: put a card back in backlog from any column, on the record.
@@ -118,13 +105,6 @@ export function reopenCard(root: string, id: string, reason: string): void {
   if (!cardDir) throw new Error(`no card ${id} in any column`);
   moveCard(parseCard(cardDir), "backlog");
   emit("card.moved", { card: id, to: "backlog", by: "hand", reason });
-}
-
-// The loop's config root, set once per runLoop call (module-level because
-// moveCard is a projection helper).
-let _root: string | null = null;
-function configRoot(): string {
-  return _root ?? process.cwd();
 }
 
 // ── PIPELINES (difficulty-proportional) ──
@@ -903,7 +883,6 @@ async function convergeCard(
 }
 
 export async function runLoop(config: LoopConfig): Promise<{ processed: number; completed: number; failed: number }> {
-  _root = config.root;
   ensureScaffold();
   let processed = 0, completed = 0, failed = 0;
   const maxRetries = config.maxRetries ?? 3;
