@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { findCardDir, parseCard, packObservation, runArgv, defaultExec, type Exec } from "./runner";
 import { splitArgv } from "./verify";
 import { askRoundGate, loadDecisionConfig, resolveDecisionPort, type DecisionPort } from "./decisions";
-import { emit } from "./loop";
+import { appendEvent } from "./kernel/log";
 
 export { defaultExec, type Exec };
 
@@ -85,7 +85,7 @@ export async function acceptRef(opts: AcceptOptions): Promise<AcceptResult> {
   const wt = mkdtempSync(join(tmpdir(), "bandit-accept-"));
   const runs: GateRun[] = [];
   let shadow: AcceptResult["shadow"] = { demonstrates: null, vacuous: null };
-  emit("acceptance.started", { card: opts.cardId, ref: opts.ref, sha, repo });
+  appendEvent(opts.root, "acceptance.started", { card: opts.cardId, ref: opts.ref, sha, repo });
   try {
     const add = exec(["git", "worktree", "add", "--detach", wt, sha], repo);
     if (add.code !== 0) throw new AcceptError(`git worktree add failed: ${add.stderr.trim().slice(0, 200)}`);
@@ -109,12 +109,12 @@ export async function acceptRef(opts: AcceptOptions): Promise<AcceptResult> {
     rmSync(wt, { recursive: true, force: true });
   }
   const passed = runs.length === 1 + gates.length && runs.every((g) => g.exitCode === 0);
-  emit(passed ? "acceptance.passed" : "acceptance.failed", { card: opts.cardId, ref: opts.ref, sha, gates: runs, shadow });
+  appendEvent(opts.root, passed ? "acceptance.passed" : "acceptance.failed", { card: opts.cardId, ref: opts.ref, sha, gates: runs, shadow });
   if (opts.post && pr !== null) {
     const rows = runs.map((g) => `| ${g.name} | \`${g.argv.join(" ")}\` | ${g.exitCode} | ${(g.durationMs / 1000).toFixed(1)}s |`);
     const body = [`**bandit accept** \`${opts.cardId}\` at \`${sha.slice(0, 12)}\`: **${passed ? "PASSED" : "FAILED"}**`, "", "| gate | argv | exit | time |", "|---|---|---|---|", ...rows].join("\n");
     const c = exec(["gh", "pr", "comment", String(pr), "--body", body], repo);
-    if (c.code !== 0) emit("acceptance.post_failed", { card: opts.cardId, pr, reason: c.stderr.trim().slice(0, 200) });
+    if (c.code !== 0) appendEvent(opts.root, "acceptance.post_failed", { card: opts.cardId, pr, reason: c.stderr.trim().slice(0, 200) });
   }
   return { passed, sha, gates: runs, shadow };
 }
