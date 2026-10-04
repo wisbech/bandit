@@ -1,0 +1,13 @@
+{
+  "name": "bandit-guard",
+  "version": "0.1.0",
+  "description": "Asks bandit guard before Claude edits a file and refuses protected paths.",
+  "userConfig": {
+    "bandit": {
+      "type": "string",
+      "title": "bandit command",
+      "description": "Command that runs bandit, e.g. bandit or bun /path/to/bandit/src/cli.ts",
+      "default": "bandit"
+    }
+  }
+}
