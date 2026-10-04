@@ -305,6 +305,21 @@ const COMMANDS: Command[] = [
     },
   },
   {
+    name: "cost",
+    summary: "bandit cost [--json] — rounds, tokens and judge verdict per card from the event log; cost per accepted card",
+    fn: async (args) => {
+      const { costReport } = await import("./cost");
+      const r = costReport(process.cwd());
+      if (args.includes("--json")) console.log(JSON.stringify(r));
+      else {
+        for (const c of r.results) console.log(`  ${c.id}  rounds ${c.rounds}  tokens ${c.tokens}  accepted ${c.accepted ? "yes" : "no"}`);
+        if (r.results.length === 0) console.log("  (no cards)");
+        console.log(`  total: ${r.cards} card(s), ${r.accepted} accepted, ${r.rounds} round(s), ${r.tokens} tokens, cost per accepted card ${r.costPerAccepted ?? "n/a"}`);
+      }
+      process.exit(0);
+    },
+  },
+  {
     name: "ratify",
     summary: 'human-only: pin a card\'s check: bandit ratify <card-id> --paths <p1,p2,...> [--verify "<cmd>"] — writes checks/<card-id>.json; you commit it on the base branch',
     fn: async (args) => {
